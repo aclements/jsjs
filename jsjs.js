@@ -424,11 +424,14 @@ var jsjs = new function() {
         maxPrec = Math.max(maxPrec, prec);
     };
 
-    // These precedence numbers correspond to
+    // These precedence numbers mostly correspond to
     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Operator_Precedence
-    binop("[", 1, "lookup");
-    binop(".", 1, "member");
-    unop("new", 1, "right");
+    // Level 2 differs somewhat because there is no way to describe
+    // the relationship between new, call, and member lookup strictly
+    // with precedence.
+    binop("[", 2, "lookup");
+    binop(".", 2, "member");
+    unop("new", 2, "right");
     binop("(", 2, "call");
     unop("++ --", 3, "left");
     unop("delete void typeof ++ -- + - ~ !", 4, "right");
@@ -474,26 +477,28 @@ var jsjs = new function() {
         if (prec < minPrec)
             return this.pPrimaryExpression();
 
-        // Right-associative (prefix) unary operators
+        var node;
         var next = this._peek();
         if (unopsR[next.v] === prec) {
-            var node = this._node(next.v);
-            node.push(this.pExpressionN(arg, prec));
-            // Is this a 'new a()' expression?  new is lower
-            // precedence than call so we can special case this.
-            // XXX This fails to parse "new X().Y"
+            // Right-associative (prefix) unary operators
+            node = this._node(next.v);
+            node.push(this.pExpressionN(next.v==="new" ? "noCall" : arg, prec));
+            // Is this a 'new a()' expression?  We disallow calls when
+            // parsing a new so we can special-case this.
             if (next.v === "new" && node.alt("("))
                 node.consume("@pAssignmentExpression,* )");
-            return node;
+        } else {
+            node = this.pExpressionN(arg, prec - 1);
         }
 
-        var node = this.pExpressionN(arg, prec - 1);
         while (true) {
             var next = this._peek();
 
             if (binops[next.v] !== prec && unopsL[next.v] !== prec)
                 return node;
             if (next.v === "in" && arg === "noIn")
+                return node;
+            if (next.v === "(" && arg === "noCall")
                 return node;
             var nnode = this._node();
             nnode.push(node);
@@ -517,6 +522,7 @@ var jsjs = new function() {
                 node.push(this.pExpressionN(arg, prec - 1));
                 break;
             case "call":        // Left associative-ish
+                // XXX This can't parse x().y()
                 node.consume("@pAssignmentExpression,* )");
                 break;
             case "lookup":
@@ -654,5 +660,5 @@ var jsjs = new function() {
     //   LeftHandSideExpression Arguments
     //
     // This grammar actually works fine if we prefer the first branch
-    // of LeftHandSideExpression.
+    // of LeftHandSideExpression.  XXX Wrong.  "x().y()"
 };
