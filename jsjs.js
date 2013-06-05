@@ -173,7 +173,9 @@ var jsjs = new function() {
     // is a space-separated list of parts, where each part is one of:
     // "literal" to match a keyword or operator, ".type" to match any
     // token of the given type, or "@function" to call function on the
-    // parser.  A part can optionally be followed by * or ,* to repeat
+    // parser.  If function is followed by "^x", it will be passed x
+    // as a string argument; otherwise it will be passed an empty
+    // string.  A part can optionally be followed by * or ,* to repeat
     // the part or repeat it separated by commas.  Each part of a rule
     // will add exactly one child to this node.
     Node.prototype.consume = function(rule) {
@@ -205,10 +207,12 @@ var jsjs = new function() {
                 val = next;
                 ++parser._pos;
             } else if (m[1] === "@") {
-                var method = parser[m[2]];
+                var subm = /^([^^]+)(?:\^(.*))?$/.exec(m[2]);
+                var method = parser[subm[1]];
                 if (!method)
-                    throw "Bug: Unknown production " + m[2];
-                val = method.call(parser);
+                    throw "Bug: Unknown production " + subm[1];
+                var arg = subm[2] || "";
+                val = method.call(parser, arg);
             }
             this.push(val);
         }
@@ -315,6 +319,7 @@ var jsjs = new function() {
         case "{":               // Block
             return this._node("{ @pStatement* }");
         case "var":             // VariableStatement
+            // XXX This allows zero declarations
             return this._node("var @pVariableDeclaration,* ;");
         case ";":               // EmptyStatement
             return this._node(";");
@@ -329,8 +334,25 @@ var jsjs = new function() {
         case "while":
             return this._node("while ( @pExpression ) @pStatement");
         case "for":
-            // XXX
-            throw "Unsupported statement: for";
+            var node = this._node("for (");
+            var allowIn = true;
+            if (node.alt("var")) {
+                var decls = this._node("@pVariableDeclaration^noIn,*");
+                allowIn = (decls.length == 1);
+                node.push(decls);
+            } else {
+                node.alt("@pExpression^noIn");
+            }
+            if (allowIn && this._peek().v === "in") {
+                node.consume("in @pExpression )");
+            } else {
+                node.consume(";");
+                node.alt("@pExpression");
+                node.consume(";");
+                node.alt("@pExpression");
+                node.consume(")");
+            }
+            return node.consume("@pStatement");
         case "continue":        // ContinueStatement
             var node = this._node("continue");
             node.alt(".identifier");
@@ -369,10 +391,10 @@ var jsjs = new function() {
         this._throwExpect("statement");
     };
 
-    Parser.prototype.pVariableDeclaration = function() {
+    Parser.prototype.pVariableDeclaration = function(arg) {
         var node = this._node(".identifier");
         if (node.alt("="))
-            node.consume("@pAssignmentExpression");
+            node.consume("@pAssignmentExpression^" + arg);
         return node;
     };
 
@@ -426,14 +448,15 @@ var jsjs = new function() {
     binop("= += -= *= /= %= <<= >>= >>>= &= ^= |=", 17, "right");
     binop(",", 18);
 
-    Parser.prototype.pExpression = function() {
+    Parser.prototype.pExpression = function(arg, prec) {
+        if (prec === undefined) prec = maxPrec;
         // If we don't get anywhere, ignore the error that was
         // actually recorded (which will be something like
         // "identifier") and given a useful one.
         var oErrors = this._errors.slice(0), oErrorPos = this._errorPos;
         var oPos = this._pos;
         try {
-            return this.pExpressionN(maxPrec);
+            return this.pExpressionN(arg, prec);
         } catch (e) {
             if (!(e instanceof SyntaxError) || this._pos != oPos)
                 throw e;
@@ -443,14 +466,11 @@ var jsjs = new function() {
         }
     };
 
-    Parser.prototype.pAssignmentExpression = function() {
-        // XXX This gets called from one place outside of the
-        // expression grammar, so we probably need the same error
-        // handling.
-        return this.pExpressionN(binops["="]);
+    Parser.prototype.pAssignmentExpression = function(arg) {
+        return this.pExpression(arg, binops["="]);
     };
 
-    Parser.prototype.pExpressionN = function(prec) {
+    Parser.prototype.pExpressionN = function(arg, prec) {
         if (prec < minPrec)
             return this.pPrimaryExpression();
 
@@ -458,19 +478,22 @@ var jsjs = new function() {
         var next = this._peek();
         if (unopsR[next.v] === prec) {
             var node = this._node(next.v);
-            node.push(this.pExpressionN(prec));
+            node.push(this.pExpressionN(arg, prec));
             // Is this a 'new a()' expression?  new is lower
             // precedence than call so we can special case this.
+            // XXX This fails to parse "new X().Y"
             if (next.v === "new" && node.alt("("))
                 node.consume("@pAssignmentExpression,* )");
             return node;
         }
 
-        var node = this.pExpressionN(prec - 1);
+        var node = this.pExpressionN(arg, prec - 1);
         while (true) {
             var next = this._peek();
 
             if (binops[next.v] !== prec && unopsL[next.v] !== prec)
+                return node;
+            if (next.v === "in" && arg === "noIn")
                 return node;
             var nnode = this._node();
             nnode.push(node);
@@ -484,14 +507,14 @@ var jsjs = new function() {
             // Binary operators
             switch (binopsAssoc[next.v]) {
             case "right":
-                node.push(this.pExpressionN(prec));
+                node.push(this.pExpressionN(arg, prec));
                 return node;
             case "ternary":     // Right associative-ish
-                // XXX allowIn carries to false branch, but not to true
-                return node.consume("@pAssignmentExpression : @pAssignmentExpression");
+                // noIn carries to false branch, but not to true
+                return node.consume("@pAssignmentExpression : @pAssignmentExpression^" + arg);
 
             case "left":
-                node.push(this.pExpressionN(prec - 1));
+                node.push(this.pExpressionN(arg, prec - 1));
                 break;
             case "call":        // Left associative-ish
                 node.consume("@pAssignmentExpression,* )");
