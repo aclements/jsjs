@@ -263,6 +263,26 @@ var jsjs = new function() {
         return res;
     };
 
+    Node.prototype.toString = function() {
+        var res = "";
+        // XXX Horrible and probably wrong
+        var isExpr = (this.length === 3 &&
+                      this[0] instanceof Node &&
+                      this[1] instanceof Tok &&
+                      this[2] instanceof Node &&
+                      this[1].v !== ",");
+        if (isExpr)
+            res += "(";
+        for (var i = 0; i < this.length; i++) {
+            if (i > 0)
+                res += " ";
+            res += this[i];
+        }
+        if (isExpr)
+            res += ")";
+        return res;
+    };
+
     this.Parser = function(toks) {
         this._toks = toks;
         this._pos = 0;
