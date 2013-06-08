@@ -160,14 +160,26 @@ var jsjs = new function() {
                 "at line " + this.got.line + ", column " + this.got.col);
     };
 
+    // XXX Much of this Node stuff was for when I thought I wanted to
+    // re-print the code in something close to its original form.
+    // Much of this can probably be simplified if I don't need that.
+
     function Node(parser) {
         this._parser = parser;
         this.length = 0;
+        this._type = this._op = null;
     }
 
     Node.prototype.splice = Array.prototype.splice;
     Node.prototype.push = Array.prototype.push;
+    Node.prototype.pop = Array.prototype.pop;
     Node.prototype.forEach = Array.prototype.forEach;
+
+    Node.prototype.type = function(type, op) {
+        this._type = type;
+        this._op = op;
+        return this;
+    };
 
     // Consume input from this node's parser according to rule.  Rule
     // is a space-separated list of parts, where each part is one of:
@@ -198,8 +210,10 @@ var jsjs = new function() {
                 if (next.v !== m[2])
                     //throw new SyntaxError("'" + m[2] + "'", next);
                     this._parser._throwExpect("'" + m[2] + "'");
-                val = next;
                 ++parser._pos;
+                if (this._type === null)
+                    this._type = next.v;
+                continue;
             } else if (m[1] === ".") {
                 if (next.t !== m[2])
                     //throw new SyntaxError(m[2], next);
@@ -220,14 +234,14 @@ var jsjs = new function() {
     };
 
     Node.prototype._star = function(rule) {
-        var node = new Node(this._parser);
+        var node = new Node(this._parser).type("list");
         while (node.alt(rule))
             ;
         return node;
     };
 
     Node.prototype._commaStar = function(rule) {
-        var node = new Node(this._parser);
+        var node = new Node(this._parser).type("list");
         if (!node.alt(rule))
             return node;
         while (node.alt(","))
@@ -264,23 +278,12 @@ var jsjs = new function() {
     };
 
     Node.prototype.toString = function() {
-        var res = "";
-        // XXX Horrible and probably wrong
-        var isExpr = (this.length === 3 &&
-                      this[0] instanceof Node &&
-                      this[1] instanceof Tok &&
-                      this[2] instanceof Node &&
-                      this[1].v !== ",");
-        if (isExpr)
-            res += "(";
-        for (var i = 0; i < this.length; i++) {
-            if (i > 0)
-                res += " ";
-            res += this[i];
-        }
-        if (isExpr)
-            res += ")";
-        return res;
+        var res = "(" + this._type;
+        if (this._op)
+            res += "[" + this._op + "]";
+        for (var i = 0; i < this.length; i++)
+            res += " " + this[i];
+        return res + ")";
     };
 
     this.Parser = function(toks) {
@@ -348,6 +351,8 @@ var jsjs = new function() {
             var node = this._node("if ( @pExpression ) @pStatement");
             if (node.alt("else"))
                 node.consume("@pStatement");
+            else
+                node.push(null);
             return node;
         case "do":              // IterationStatement
             return this._node("do @pStatement while ( @pExpression ) ;");
@@ -361,29 +366,29 @@ var jsjs = new function() {
                 allowIn = (decls.length == 1);
                 node.push(decls);
             } else {
-                node.alt("@pExpression^noIn");
+                node.alt("@pExpression^noIn") || node.push(null);
             }
             if (allowIn && this._peek().v === "in") {
-                node.consume("in @pExpression )");
+                node.type("forin").consume("in @pExpression )");
             } else {
                 node.consume(";");
-                node.alt("@pExpression");
+                node.alt("@pExpression") || node.push(null);
                 node.consume(";");
-                node.alt("@pExpression");
+                node.alt("@pExpression") || node.push(null);
                 node.consume(")");
             }
             return node.consume("@pStatement");
         case "continue":        // ContinueStatement
             var node = this._node("continue");
-            node.alt(".identifier");
+            node.alt(".identifier") || node.push(null);
             return node.consume(";");
         case "break":           // BreakStatement
             var node = this._node("break");
-            node.alt(".identifier");
+            node.alt(".identifier") || node.push(null);
             return node.consume(";");
         case "return":          // ReturnStatement
             var node = this._node("return");
-            node.alt("@pExpression");
+            node.alt("@pExpression") || node.push(null);
             return node.consume(";");
         case "with":
             return this._node("with ( @pExpression ) @pStatement");
@@ -396,8 +401,14 @@ var jsjs = new function() {
             var node = this._node("try { @pStatement* }");
             if (node.alt("catch"))
                 node.consume("( .identifier ) { @pStatement* }");
+            else {
+                node.push(null);
+                node.push(null);
+            }
             if (node.alt("finally"))
                 node.consume("finally { @pStatement* }");
+            else
+                node.push(null);
             return node;
         case "debugger":
             return this._node("debugger ;");
@@ -501,12 +512,17 @@ var jsjs = new function() {
         var next = this._peek();
         if (unopsR[next.v] === prec) {
             // Right-associative (prefix) unary operators
-            node = this._node(next.v);
+            node = this._node(next.v).type("unop", next.v);
             node.push(this.pExpressionN(next.v==="new" ? "noCall" : arg, prec));
             // Is this a 'new a()' expression?  We disallow calls when
             // parsing a new so we can special-case this.
-            if (next.v === "new" && node.alt("("))
-                node.consume("@pAssignmentExpression,* )");
+            if (next.v === "new") {
+                node.type("new");
+                if (node.alt("("))
+                    node.consume("@pAssignmentExpression,* )");
+                else
+                    node.push(null);
+            }
         } else {
             node = this.pExpressionN(arg, prec - 1);
         }
@@ -520,7 +536,7 @@ var jsjs = new function() {
                 return node;
             if (next.v === "(" && arg === "noCall")
                 return node;
-            var nnode = this._node();
+            var nnode = this._node().type("binop", next.v);
             nnode.push(node);
             node = nnode;
             node.consume(next.v);
@@ -536,20 +552,20 @@ var jsjs = new function() {
                 return node;
             case "ternary":     // Right associative-ish
                 // noIn carries to false branch, but not to true
-                return node.consume("@pAssignmentExpression : @pAssignmentExpression^" + arg);
+                return node.consume("@pAssignmentExpression : @pAssignmentExpression^" + arg).type("ternary");
 
             case "left":
                 node.push(this.pExpressionN(arg, prec - 1));
                 break;
             case "call":        // Left associative-ish
                 // XXX This can't parse x().y()
-                node.consume("@pAssignmentExpression,* )");
+                node.consume("@pAssignmentExpression,* )").type("call");
                 break;
             case "lookup":
-                node.consume("@pExpression ]");
+                node.consume("@pExpression ]").type("lookup");
                 break;
             case "member":
-                node.consume("@pIdentifierName");
+                node.consume("@pIdentifierName").type("member");
                 break;
             }
         }
@@ -571,7 +587,7 @@ var jsjs = new function() {
         var next = this._peek();
         if (next.t === "identifier" || next.t === "number" ||
             next.t === "string")
-            return this._node("." + next.t);
+            return this._node("." + next.t).type(next.t);
         // XXX RegularExpressionLiteral
         switch (next.v) {
         case "function":
@@ -582,18 +598,23 @@ var jsjs = new function() {
         case "this": case "null": case "true": case "false":
             return this._node(next.v);
         case "[":
-            var node = this._node("[");
+            var node = this._node("[").type("array");
             var list = this._node();
             node.push(list);
             while (true) {
-                list.alt("@pAssignmentExpression");
-                if (list.alt("]"))
+                if (!list.alt("@pAssignmentExpression"))
+                    list.push(null);
+                if (list.alt("]")) {
+                    // Elide final element
+                    if (list[list.length - 1] === null)
+                        list.pop();
                     break;
+                }
                 list.consume(",");
             }
             return node;
         case "{":
-            return this._node("{ @pPropertyAssignment,* }");
+            return this._node("{ @pPropertyAssignment,* }").type("object");
         case "(":
             return this._node("( @pExpression )")[1];
         }
@@ -601,13 +622,12 @@ var jsjs = new function() {
     };
 
     Parser.prototype.pPropertyAssignment = function() {
-        var node = this._node();
         var next = this._peek();
         if (next.v === "get" || next.v === "set")
             throw "Unsupported: Property getters and setters";
         switch (next.t) {
         case "identifier": case "keyword": case "string": case "number":
-            return node.consume("." + next.t + " : @pAssignmentExpression");
+            return this._node("." + next.t + " : @pAssignmentExpression").type("property");
         }
         this._throwExpect("property name");
     };
