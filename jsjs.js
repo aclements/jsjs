@@ -114,6 +114,7 @@ var jsjs = new function() {
             if (m === null || m.index != start)
                 throw "Syntax error at " + line + ":" + col;
 
+            var thisline = line, thiscol = col;
             var lines = m[0].split(/\r\n?|[\n\u2028\u2029]/g);
             line += lines.length - 1;
             if (lines.length > 1)
@@ -133,7 +134,7 @@ var jsjs = new function() {
                 type = "number";
             else if (m[5])
                 type = "string";
-            toks.push(new Tok(m[0], type, line, col));
+            toks.push(new Tok(m[0], type, thisline, thiscol));
         }
         toks.push(new Tok("", "EOF", line, col));
         return toks;
