@@ -144,13 +144,24 @@ var jsjs = new function() {
     // Parser
     //
 
-    this.SyntaxError = function(expected, got) {
+    function SyntaxError(pos, message) {
+        this.pos = pos;
+        this.message = message;
+    };
+    this.SyntaxError = SyntaxError;
+
+    SyntaxError.prototype.toString = function() {
+        return (this.message +
+                " at line " + this.pos.line + ", column " + this.pos.col);
+    };
+
+    function ExpectedError(expected, got) {
         this.expected = expected;
         this.got = got;
     };
-    var SyntaxError = this.SyntaxError;
+    ExpectedError.prototype = Object.create(SyntaxError.prototype);
 
-    SyntaxError.prototype.toString = function() {
+    ExpectedError.prototype.toString = function() {
         var eStr;
         if (this.expected.length === 1)
             eStr = this.expected[0];
@@ -302,7 +313,7 @@ var jsjs = new function() {
             this._errors = [];
         }
         this._errors.push(name);
-        throw new SyntaxError(this._errors, this._peek());
+        throw new ExpectedError(this._errors, this._peek());
     };
 
     Parser.prototype._peek = function() {
