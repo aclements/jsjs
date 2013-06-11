@@ -180,6 +180,7 @@ var jsjs = new function() {
         this._parser = parser;
         this.length = 0;
         this._type = this._op = null;
+        this.line = this.col = null;
     }
 
     Node.prototype.splice = Array.prototype.splice;
@@ -212,6 +213,11 @@ var jsjs = new function() {
 
             if (!m)
                 throw "Bad rule '" + parts[i] + "' in '" + rule + "'";
+
+            if (this.line === null) {
+                this.line = next.line;
+                this.col = next.col;
+            }
 
             var val;
             if (m[3] === "*")
