@@ -336,7 +336,7 @@ var jsjs = new function() {
     // Parser productions
 
     Parser.prototype.pProgram = function() {
-        return this._node("@pSourceElement* .EOF")[0];
+        return this._node("@pSourceElement* .EOF").type("program");
     };
 
     Parser.prototype.pSourceElement = function() {
@@ -434,7 +434,7 @@ var jsjs = new function() {
         // XXX LabelledStatement
         // ExpressionStatement.  This must come after { to
         // disambiguate a block from an object literal.
-        var node = this._node().alt("@pExpression ;");
+        var node = this._node().type("expression").alt("@pExpression ;");
         if (node !== null)
             return node;
         this._throwExpect("statement");
@@ -444,6 +444,8 @@ var jsjs = new function() {
         var node = this._node(".identifier");
         if (node.alt("="))
             node.consume("@pAssignmentExpression^" + arg);
+        else
+            node.push(null);
         return node;
     };
 
