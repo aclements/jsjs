@@ -653,6 +653,402 @@ var jsjs = new function() {
     };
 
     //////////////////////////////////////////////////////////////////
+    // Compiler
+    //
+
+    function Compiler() {
+        this._pieces = [];
+        this._nreg = this._maxreg = null;
+        this._pc = 1;
+        this._bindings = [];
+    }
+    this.Compiler = Compiler;
+
+    Compiler.prototype.emit = function(code) {
+        this._pieces.push(code);
+    };
+
+    Compiler.prototype.assign = function(reg, expr) {
+        this.emit(reg + " = " + expr + ";\n");
+    };
+
+    Compiler.prototype.newReg = function() {
+        var name = "$r" + this._nreg;
+        ++this._nreg;
+        if (this._nreg > this._maxreg)
+            this._maxreg = this._nreg;
+        return name;
+    };
+
+    Compiler.prototype.newLabel = function() {
+        return {pc: null};
+    };
+
+    Compiler.prototype.emitJump = function(label) {
+        this.emit({compute: function() {
+            if (label.pc === null)
+                throw "BUG: Label not set";
+            return "{ pc = " + label.pc + "; break; }\n";
+        }});
+    };
+
+    Compiler.prototype.setLabel = function(label) {
+        if (label.pc !== null)
+            throw "BUG: Label set twice";
+        label.pc = this._pc++;
+        this.emit("case " + label.pc + ":\n");
+    };
+
+    Compiler.prototype.emitPause = function() {
+        var pc = this._pc++;
+        this.emit("pc = " + pc + "; return; case " + pc + ":\n");
+    };
+
+    Compiler.prototype.putValue = function(v, w) {
+        this.emit(v + ".putValue(" + w + ");\n");
+    };
+
+    Compiler.prototype.generate = function() {
+        // XXX Need two functions: An outer one to establish the
+        // execution context, including registers and maybe the PC
+        // (which must persist across exits) and an inner one that
+        // implements stepping.  Calling the outer one initializes the
+        // context (it should probably take an environment or a
+        // universe) and returns the inner one, which is now closed
+        // under that context.
+
+        // XXX Handle implicit return at end of code
+
+        // XXX If I were to nest these things and keep track of
+        // bindings in scope, I could use the target's variable
+        // resolution for all non-global bindings and simply poke my
+        // global object for anything else.
+
+        // Basic prologue
+        var code = ("(function(universe) {\n" +
+                    "  'use strict';\n" +
+                    "  var env = universe.env, V;\n" +
+                    "  var pc = 0;\n");
+        // Declare registers
+        for (var i = 0; i < this._maxreg; i++) {
+            if (i == 0)
+                code += "  var ";
+            else
+                code += ", ";
+            code += "$r" + i;
+        }
+        code += ";\n";
+
+        // Step function
+        code += ("  return function() {\n" +
+                 "    while (true) {\n" +
+                 "      switch (pc) {\n" +
+                 "      case 0:\n");
+        for (var i = 0; i < this._pieces.length; i++) {
+            var piece = this._pieces[i];
+            if (typeof piece === "object")
+                code += piece.compute();
+            else
+                code += piece;
+        }
+        code += ("      }\n" +
+                 "    }\n" +
+                 "  };\n" +
+                 "})");
+        return code;
+    };
+
+    // XXX Create a Code object?  Compiling global code can return
+    // that directly, compiling a function can create a function
+    // object that includes the Code object and the enclosing
+    // environment.
+    //
+    // The Code object should take an execution context (fresh for
+    // function code, but not for global code) and perform declaration
+    // binding instantiation on that context.
+
+    Compiler.prototype.cProgram = function(node) {
+        this.cSourceElementList(node[0]);
+    };
+
+    Compiler.prototype.cSourceElementList = function(nodes) {
+        // XXX Need a stack of these for nested functions?  Or maybe I
+        // just create a new Compiler and generate returns the Code
+        // object?
+        this._pieces = [];
+        this._nreg = null;
+        this._maxreg = 0;
+        this._pc = 1;
+        this._bindings = [];
+        for (var i = 0; i < nodes.length; i++) {
+            if (nodes[i]._type === "function")
+                throw "Unimplemented: function";
+            else
+                this.cStatement(nodes[i], null, null);
+        }
+        var code = new Code(this.generate(), this._bindings);
+//        this._pieces = this._nreg = this._maxreg = this._pc = this._bindings = null;
+        return code;
+    };
+
+    Compiler.prototype.cStatement = function(node, lCont, lBreak) {
+        if (node._type !== "{" && node._type !== ";")
+            this.emitPause();
+
+        switch (node._type) {
+        case "{":               // [ES5.1 12.1]
+            for (var i = 0; i < node[0].length; i++)
+                this.cStatement(node[0][i], lCont, lBreak);
+            break;
+
+        case "var":             // [ES5.1 12.2]
+            for (var i = 0; i < node[0].length; i++) {
+                var id = node[0][i][0].v, val = node[0][i][1];
+                if (id === "eval" || id === "arguments")
+                    throw new SyntaxError(
+                        node[0][i],
+                        "Cannot assign " + id + " in strict mode");
+                if (val)
+                    this.putValue("env.getIdentifierReference('" + id + "')",
+                                  this.cExprTop(val));
+                if (this._bindings.indexOf(id) === -1)
+                    this._bindings.push(id);
+            }
+            break;
+
+        case ";":               // [ES5.1 12.3]
+            break;
+
+        case "expression":      // [ES5.1 12.4]
+            // We assign the result value of the expression to the
+            // statement value field.  It turns out that, even though
+            // threading the statement value permeates the JavaScript
+            // statement semantics, that threading is equivalent to
+            // just tracking the last statement expression value.
+            this.assign("V", this.cExprTop(node[0]));
+            break;
+
+        case "if":              // [ES5.1 12.5]
+            var cond = this.cExprTop(node[0]);
+            var altLabel = this.newLabel();
+            this.emit("if (!" + cond + ")");
+            this.emitJump(altLabel);
+            this.cStatement(node[1], lCont, lBreak);
+            if (node[2]) {
+                var endLabel = this.newLabel();
+                this.emitJump(endLabel);
+            }
+            this.setLabel(altLabel);
+            if (node[2]) {
+                this.cStatement(node[2], lCont, lBreak);
+                this.setLabel(endLabel);
+            }
+            break;
+
+        case "do":              // [ES5.1 12.6.1]
+            lCont = this.newLabel();
+            lBreak = this.newLabel();
+            this.setLabel(lCont);
+            this.cStatement(node[0], lCont, lBreak);
+            var cond = this.cExprTop(node[1]);
+            this.emit("if (" + cond + ")");
+            this.emitJump(lCont);
+            this.setLabel(lBreak);
+            break;
+
+        case "while":           // [ES5.1 12.6.2]
+            lCont = this.newLabel();
+            lBreak = this.newLabel();
+            this.setLabel(lCont);
+            var cond = this.cExprTop(node[0]);
+            this.emit("if (!" + cond + ")");
+            this.emitJump(lBreak);
+            this.cStatement(node[1], lCont, lBreak);
+            this.emitJump(lCont);
+            this.setLabel(lBreak);
+            break;
+
+        case "for":             // [ES5.1 12.6.3]
+        case "forin":           // [ES5.1 12.6.4]
+            throw "Unimplemented: for";
+
+        case "continue":        // [ES5.1 12.7]
+            if (node[0] !== null)
+                throw "Unimplemented: continue with label";
+            if (!lCont)
+                throw new SyntaxError(
+                    node, "continue outside iteration statement");
+            this.emitJump(lCont);
+            break;
+
+        case "break":           // [ES5.1 12.8]
+            if (node[0] !== null)
+                throw "Unimplemented: break with label";
+            if (!lBreak)
+                throw new SyntaxError(
+                    node, "break outside iteration or switch statement");
+            this.emitJump(lBreak);
+            break;
+
+        case "return":          // [ES5.1 12.9]
+            throw "Unimplemented: return";
+
+        case "with":            // [ES5.1 12.10]
+            throw new SyntaxError(
+                node, "with statement is not allowed in strict mode");
+
+        case "switch":          // [ES5.1 12.11]
+            throw "Unimplemented: switch";
+
+        case "label":           // [ES5.1 12.12]
+            // Ignored, since we don't support labels in break or continue
+            this.cStatement(node[1]);
+            break;
+
+        case "throw":           // [ES5.1 12.13]
+            throw "Unimplemented: throw";
+
+        case "try":             // [ES5.1 12.14]
+            throw "Unimplemented: try";
+
+        case "debugger":        // [ES5.1 12.15]
+            break;
+
+        default:
+            throw "BUG: Unhandled statement node " + node._type;
+        }
+    };
+
+    Compiler.prototype.cExprTop = function(node) {
+        this._nreg = 0;
+        var out = this.cExpr(node, this.newReg(), false);
+        this._nreg = null;
+        return out;
+    };
+
+    Compiler.prototype.cExpr = function(node, reg, needRef) {
+        function notLHS() {
+            if (needRef)
+                throw "Not a left hand side expression"; // XXX
+        }
+
+        switch (node._type) {
+        case "binop":
+            notLHS();
+            if (node._op === "&&" || node._op === "||") {
+                this.cExpr(node[0], reg);
+                if (node.op === "&&")
+                    this.emit("if (!" + reg + ")");
+                else
+                    this.emit("if (" + reg + ")");
+                var label = this.newLabel();
+                this.emitJump(label);
+                this.cExpr(node[1], reg);
+                this.setLabel(label);
+            } else if (node._op === "=") {
+                if (node[0]._type === "identifier" &&
+                    (node[0][0].v === "eval" || node[0][0].v === "arguments"))
+                    throw new SyntaxError(node[0][0],
+                        "Cannot assign '" + node[0][0].v + "' in strict mode");
+                var l = this.cExpr(node[0], this.newReg(), true);
+                var r = this.cExpr(node[1], reg);
+                this.putValue(l, r);
+            } else if (node._op[node._op.length - 1] === "=") {
+                // XXX Compound assignment
+                throw "Unimplemented: Compound assignment";
+            } else if (node._op === ",") {
+                this.cExpr(node[0], reg);
+                this.cExpr(node[1], reg);
+            } else {
+                var l = this.cExpr(node[0], reg);
+                var r = this.cExpr(node[1], this.newReg());
+                this.assign(l, l + " " + node._op + " " + r);
+            }
+            break;
+
+            // XXX unop, ternary, new, call, lookup, member
+
+        case "number": case "string": case "null": case "true": case "false":
+            notLHS();
+            console.log(node);
+            this.assign(reg, node[0].v);
+            break;
+
+        case "identifier":
+            this.assign(
+                reg, "env.getIdentifierReference('" + node[0].v + "')");
+            if (!needRef)
+                this.assign(reg, reg + ".getValue()");
+            break;
+
+            // XXX function, array, object
+
+        default:
+            throw "BUG: Unhandled expr node " + node._type;
+        }
+
+        return reg;
+    };
+
+    //////////////////////////////////////////////////////////////////
+    // Runtime support
+    //
+
+    // Construct a new Universe object.
+    //
+    // global must be the object to use as the global environment of
+    // this universe.
+    function Universe(global) {
+        this.env = new Environment(global, null);
+    }
+
+    // An environment record.  [ES5.1 10.2]
+    //
+    // This is used for both declarative and object environment
+    // records.
+    function Environment(object, outer) {
+        this.bindings = object;
+        this.outer = outer;
+    }
+
+    // Get a Reference to identifier name.  [ES5.1 10.2.2.1]
+    //
+    // In contrast with the spec, 'lex' is implied by the Environment
+    // on which this is called.  'strict' is always true.
+    Environment.prototype.getIdentifierReference = function(name) {
+        var lex = this;
+        while (lex !== null) {
+            if (name in lex.bindings)
+                return new Reference(lex.bindings, name);
+            lex = lex.outer;
+        }
+        return new Reference(undefined, name);
+    }
+
+    // The Reference specification type [ES5.1 8.7].  We only
+    // implement strict mode, so IsStrictReference is always true.
+    function Reference(base, name) {
+        this.base = base;
+        this.name = name;
+    }
+
+    // The GetValue algorithm [ES5.1 8.7.1].
+    Reference.prototype.getValue = function() {
+        if (this.base === undefined)
+            throw "ReferenceError: " + this.name;
+        // XXX Is this complete?
+        return this.base[this.name];
+    };
+
+    // The PutValue algorithm [ES5.1 8.7.2].
+    Reference.prototype.putValue = function(w) {
+        if (this.base === undefined)
+            throw "ReferenceError: " + this.name;
+        // XXX Is this complete?
+        this.base[this.name] = w;
+    };
+
+    //////////////////////////////////////////////////////////////////
     // External interface
     //
 
