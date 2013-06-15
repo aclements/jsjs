@@ -704,25 +704,25 @@ var jsjs = new function() {
         var env = this;
         while (true) {
             if (!env.outer)
-                return new StaticReference(name, true);
+                return new StaticReference("global", name);
             if (name in this.names)
-                return new StaticReference(name, false);
+                return new StaticReference(".local", name);
             env = env.outer;
         }
     };
 
     // The compile-time equivalent of the specification Reference
-    // type.  Unlike the specification type, this only distinguishes
-    // between global and local references, not which environment they
-    // belong to because we delegate local identifier handling to the
-    // base JavaScript engine.  This also doesn't distinguish
-    // unresolvable references from global references because that
-    // determination can only be made a runtime.
-    //
-    // XXX Need to handle object field references.
-    function StaticReference(name, isGlobal) {
+    // type.  base must be ".local" for a local variable, "global" for
+    // a global variable, or a register name for a property
+    // references.  Unlike the specification type, this does not
+    // distinguish different local environment frames because we
+    // delegate local identifier handling to the base JavaScript
+    // engine.  This also doesn't distinguish unresolvable references
+    // from global references because that determination can only be
+    // made a runtime.
+    function StaticReference(base, name) {
+        this.base = base;
         this.name = name;
-        this.isGlobal = isGlobal;
     }
 
     function Compiler() {
@@ -789,29 +789,31 @@ var jsjs = new function() {
                   "case " + pc + ":");
     };
 
-    // Emit code to store the value of sref in reg.  [ES5.1 8.7.1]
+    // Emit code to dereference sref into reg.  [ES5.1 8.7.1]
     Compiler.prototype.emitGetValue = function(reg, sref) {
-        if (sref.isGlobal) {
-            // XXX Proper exception
-            this.emit("if (!('" + sref.name + "' in global))",
-                      "  throw 'ReferenceError';");
-            this.assign(reg, "global." + sref.name);
-        } else {
-            // XXX Could be a property reference
+        if (sref.base === ".local") {
             this.assign(reg, targetID(sref.name));
+        } else {
+            // If this is a global variable, we need a dynamic check
+            // for unresolvable references.
+            if (sref.base === "global")
+                // XXX Proper exception
+                this.emit("if (!('" + sref.name + "' in global))",
+                          "  throw 'ReferenceError';");
+            this.assign(reg, sref.base + "." + sref.name);
         }
     };
 
     // Emit code to store the value of expr in sref.  [ES5.1 8.7.2]
     Compiler.prototype.emitPutValue = function(sref, expr) {
-        if (sref.isGlobal) {
-            // XXX Proper exception
-            this.emit("if (!('" + sref.name + "' in global))",
-                      "  throw 'ReferenceError';");
-            this.assign("global." + sref.name, expr);
-        } else {
-            // XXX Could be a property reference
+        if (sref.base === ".local") {
             this.assign(targetID(sref.name), expr);
+        } else {
+            if (sref.base === "global")
+                // XXX Proper exception
+                this.emit("if (!('" + sref.name + "' in global))",
+                          "  throw 'ReferenceError';");
+            this.assign(sref.base + "." + sref.name, expr);
         }
     };
 
@@ -893,7 +895,7 @@ var jsjs = new function() {
             if (node._type === "variableDeclaration" &&
                 !(node[0].v in env.names)) {
                 var ref = declare(node[0], {type:"var"});
-                if (ref.isGlobal)
+                if (ref.base === "global")
                     // Declare and initialize it.
                     cthis.emit("global." + ref.name + " = undefined;");
                 else
@@ -1250,7 +1252,7 @@ var jsjs = new function() {
             }
             break;
 
-            // XXX unop, ternary, new, lookup, member
+            // XXX unop, ternary, new, lookup
 
         case "call":
             // XXX Handle "this"
@@ -1273,6 +1275,16 @@ var jsjs = new function() {
                       "case " + retPC + ":",
                       // The value is "returned" in arg
                       reg + " = arg;");
+            break;
+
+        case "member":
+            var base = this.cExpr(node[0], reg || this.newReg());
+            var name = node[1].v;
+            // XXX CheckObjectCoercible?
+            var sref = new StaticReference(base, name);
+            if (needRef)
+                return sref;
+            this.emitGetValue(reg, sref);
             break;
 
         case "number": case "string": case "null": case "true": case "false":
@@ -1416,8 +1428,8 @@ var jsjs = new function() {
 
 c = new jsjs.Compiler();
 //c.cProgram(jsjs.parse("{var x = 1 + 2, y = x + 3; if (x) y = 2;}"));
-c.cProgram(jsjs.parse("var x = 1; function foo(y) {return x+y;} foo(41);"));
+c.cProgram(jsjs.parse("var x = 1; function foo(y) {return x+y+z.val;} z.val=2; foo(41);"));
 //c.cProgram(jsjs.parse(str));
-global = {};
+global = {z:{val:1}};
 w = new jsjs.World(global, c.getCode());
 console.log(w.cont());
