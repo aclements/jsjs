@@ -441,7 +441,7 @@ var jsjs = new function() {
     };
 
     Parser.prototype.pVariableDeclaration = function(arg) {
-        var node = this._node(".identifier");
+        var node = this._node(".identifier").type("variableDeclaration");
         if (node.alt("="))
             node.consume("@pAssignmentExpression^" + arg);
         else
@@ -578,7 +578,6 @@ var jsjs = new function() {
                 node.push(this.pExpressionN(arg, prec - 1));
                 break;
             case "call":        // Left associative-ish
-                // XXX This can't parse x().y()
                 node.consume("@pAssignmentExpression,* )").type("call");
                 break;
             case "lookup":
@@ -656,28 +655,111 @@ var jsjs = new function() {
     // Compiler
     //
 
+    // JSJS compiled code the following properties:
+    //
+    // 1) Compiled code uses the same value representations as native
+    //    code.  This makes compiled code and native code
+    //    interchangeable.
+    //
+    // 2) The global environment is completely controlled by the
+    //    caller.  Compiled JavaScript is sandboxed to its own global
+    //    environment.  To do this, we interpose on all identifier
+    //    binding and resolution.
+    //
+    // 3) Target code can stopped and resumed at any statement
+    //    boundary.  To do this, we linearize function bodies so that
+    //    the lexical environment plus a single program counter can
+    //    describe any point in execution and we manage our own call
+    //    stack.
+
+    // Transform a source code identifier into a target code
+    // identifier.  All local identifiers in the source code have
+    // corresponding identifiers in the target code.  This mangles
+    // their names so they cannot conflict with internally-used
+    // identifiers in the target code.
+    function targetID(id) {
+        return "$" + id;
+    }
+
+    // Return a compile-time representation of a lexical environment.
+    //
+    // There is no runtime representation.  Since we only compile
+    // strict-mode code, we can statically distinguish local
+    // references from global or undefined references.  The target
+    // code declares host identifiers for each local source identifier
+    // and sets up the scopes such that the host implementation will
+    // perform all local resolution.  Hence, the target code only
+    // needs to handle global references on its own.
+    function StaticEnvironment(outer) {
+        this.names = {};
+        this.outer = outer;
+    }
+
+    // Return a StaticReference to the given identifier.  This
+    // implements the static component of [ES5.1 10.2.2.1]
+    // GetIndentifierReference, except that unresolvable references
+    // are returned as global references since we can only distinguish
+    // between the two at runtime.
+    StaticEnvironment.prototype.getIdentifierReference = function(name) {
+        var env = this;
+        while (true) {
+            if (!env.outer)
+                return new StaticReference(name, true);
+            if (name in this.names)
+                return new StaticReference(name, false);
+            env = env.outer;
+        }
+    };
+
+    // The compile-time equivalent of the specification Reference
+    // type.  Unlike the specification type, this only distinguishes
+    // between global and local references, not which environment they
+    // belong to because we delegate local identifier handling to the
+    // base JavaScript engine.  This also doesn't distinguish
+    // unresolvable references from global references because that
+    // determination can only be made a runtime.
+    //
+    // XXX Need to handle object field references.
+    function StaticReference(name, isGlobal) {
+        this.name = name;
+        this.isGlobal = isGlobal;
+    }
+
     function Compiler() {
         this._pieces = [];
-        this._nreg = this._maxreg = null;
-        this._pc = 1;
-        this._bindings = [];
+        this._nreg = null;
+        this._maxreg = 0;
+        this._allocatedIDs = [];
+        this._pc = 0;
+        this._env = null;
     }
     this.Compiler = Compiler;
 
-    Compiler.prototype.emit = function(code) {
-        this._pieces.push(code);
+    Compiler.prototype.emit = function() {
+        for (var i = 0; i < arguments.length; i++)
+            this._pieces.push(arguments[i]);
     };
 
     Compiler.prototype.assign = function(reg, expr) {
-        this.emit(reg + " = " + expr + ";\n");
+        this.emit(reg + " = " + expr + ";");
     };
 
+    // Return a new register target code identifier.  These can be
+    // reused between top-level expressions.
     Compiler.prototype.newReg = function() {
-        var name = "$r" + this._nreg;
+        var name = "r" + this._nreg;
         ++this._nreg;
         if (this._nreg > this._maxreg)
             this._maxreg = this._nreg;
         return name;
+    };
+
+    // Return a new target code identifier.  Unlike registers, these
+    // identifiers are never reused within a compilation.
+    Compiler.prototype.newID = function() {
+        var id = "id" + this._allocatedIDs.length;
+        this._allocatedIDs.push(id);
+        return id;
     };
 
     Compiler.prototype.newLabel = function() {
@@ -688,107 +770,307 @@ var jsjs = new function() {
         this.emit({compute: function() {
             if (label.pc === null)
                 throw "BUG: Label not set";
-            return "{ pc = " + label.pc + "; break; }\n";
+            return "{ pc = " + label.pc + "; break; }";
         }});
     };
 
     Compiler.prototype.setLabel = function(label) {
         if (label.pc !== null)
             throw "BUG: Label set twice";
-        label.pc = this._pc++;
-        this.emit("case " + label.pc + ":\n");
+        label.pc = ++this._pc;
+        this.emit("case " + label.pc + ":");
     };
 
+    // Emit a possible pause point.  If the world is in single-step
+    // mode, this will escape target code execution.
     Compiler.prototype.emitPause = function() {
-        var pc = this._pc++;
-        this.emit("pc = " + pc + "; return; case " + pc + ":\n");
+        var pc = ++this._pc;
+        this.emit("if (world._singleStep) {pc = " + pc + "; world._running = false; return;}",
+                  "case " + pc + ":");
     };
 
-    Compiler.prototype.putValue = function(v, w) {
-        this.emit(v + ".putValue(" + w + ");\n");
+    // Emit code to store the value of sref in reg.  [ES5.1 8.7.1]
+    Compiler.prototype.emitGetValue = function(reg, sref) {
+        if (sref.isGlobal) {
+            // XXX Proper exception
+            this.emit("if (!('" + sref.name + "' in global))",
+                      "  throw 'ReferenceError';");
+            this.assign(reg, "global." + sref.name);
+        } else {
+            // XXX Could be a property reference
+            this.assign(reg, targetID(sref.name));
+        }
+    };
+
+    // Emit code to store the value of expr in sref.  [ES5.1 8.7.2]
+    Compiler.prototype.emitPutValue = function(sref, expr) {
+        if (sref.isGlobal) {
+            // XXX Proper exception
+            this.emit("if (!('" + sref.name + "' in global))",
+                      "  throw 'ReferenceError';");
+            this.assign("global." + sref.name, expr);
+        } else {
+            // XXX Could be a property reference
+            this.assign(targetID(sref.name), expr);
+        }
     };
 
     Compiler.prototype.generate = function() {
-        // XXX Need two functions: An outer one to establish the
-        // execution context, including registers and maybe the PC
-        // (which must persist across exits) and an inner one that
-        // implements stepping.  Calling the outer one initializes the
-        // context (it should probably take an environment or a
-        // universe) and returns the inner one, which is now closed
-        // under that context.
-
-        // XXX Handle implicit return at end of code
-
-        // XXX If I were to nest these things and keep track of
-        // bindings in scope, I could use the target's variable
-        // resolution for all non-global bindings and simply poke my
-        // global object for anything else.
-
-        // Basic prologue
-        var code = ("(function(universe) {\n" +
-                    "  'use strict';\n" +
-                    "  var env = universe.env, V;\n" +
-                    "  var pc = 0;\n");
-        // Declare registers
-        for (var i = 0; i < this._maxreg; i++) {
-            if (i == 0)
-                code += "  var ";
-            else
-                code += ", ";
-            code += "$r" + i;
-        }
-        code += ";\n";
-
-        // Step function
-        code += ("  return function() {\n" +
-                 "    while (true) {\n" +
-                 "      switch (pc) {\n" +
-                 "      case 0:\n");
+        var code = "";
         for (var i = 0; i < this._pieces.length; i++) {
             var piece = this._pieces[i];
             if (typeof piece === "object")
-                code += piece.compute();
+                code += piece.compute() + "\n";
             else
-                code += piece;
+                code += piece + "\n";
         }
-        code += ("      }\n" +
-                 "    }\n" +
-                 "  };\n" +
-                 "})");
         return code;
     };
 
-    // XXX Create a Code object?  Compiling global code can return
-    // that directly, compiling a function can create a function
-    // object that includes the Code object and the enclosing
-    // environment.
-    //
-    // The Code object should take an execution context (fresh for
-    // function code, but not for global code) and perform declaration
-    // binding instantiation on that context.
-
-    Compiler.prototype.cProgram = function(node) {
-        this.cSourceElementList(node[0]);
+    Compiler.prototype.getCode = function() {
+        // XXX Make a real Code object
+        return {start: eval(this.generate())};
     };
 
-    Compiler.prototype.cSourceElementList = function(nodes) {
-        // XXX Need a stack of these for nested functions?  Or maybe I
-        // just create a new Compiler and generate returns the Code
-        // object?
-        this._pieces = [];
-        this._nreg = null;
+    // Push a new StaticEnvironment on the environment stack,
+    // initialize it according to and emit code to perform [ES5.1
+    // 10.5] declaration binding instantiation, and compile function
+    // declarations in sourceElements.  This code must appear outside
+    // the execution function declaration.
+    Compiler.prototype.emitEnterEnvironment = function(sourceElements,
+                                                       functionArgs) {
+        var env = new StaticEnvironment(this._env);
+        this._env = env;
+
+        // XXX This ignores the property descriptor and
+        // mutable/immutable stuff
+
+        function declare(idtok, info) {
+            var name = idtok.v;
+            // Check for disallowed identifiers ([ES5.1 12.2.1]
+            // variable declarations, [ES13.1] function parameters and
+            // function declarations)
+            if (name === "eval" || name === "arguments")
+                throw new SyntaxError(
+                    idtok, "Cannot assign " + id + " in strict mode");
+            env.names[name] = info;
+            return env.getIdentifierReference(name);
+        }
+
+        // Declare function parameters.  These were already
+        // initialized in the target code, so just declare them in
+        // env.
+        if (functionArgs) {
+            for (var i = 0; i < functionArgs.length; i++) {
+                var id = functionArgs[i].v;
+                if (id in env.names)
+                    // [ES5.1 13.1]
+                    throw new SyntaxError(
+                        functionArgs[i], "'" + id + "' already declared");
+                declare(functionArgs[i], {type:"argument"});
+            }
+        }
+
+        // Declare function declarations.  We can't actually
+        // initialize these until we have a complete env, so just
+        // declare them for now.
+        for (var i = 0; i < sourceElements.length; i++)
+            if (sourceElements[i]._type === "function")
+                declare(sourceElements[i][0], {type:"function"});
+
+        // Declare and initialize "arguments"
+        if (functionArgs && !("arguments" in env.names)) {
+            env.names["arguments"] = {type: "arguments"};
+            this.emit("var " + targetID("arguments") + " = arguments;");
+        }
+
+        // Declare and initialize variables
+        var cthis = this;
+        function recVar(node) {
+            if (!node || node._type === "function" ||
+                node._type === "expression")
+                return;
+            if (node._type === "variableDeclaration" &&
+                !(node[0].v in env.names)) {
+                var ref = declare(node[0], {type:"var"});
+                if (ref.isGlobal)
+                    // Declare and initialize it.
+                    cthis.emit("global." + ref.name + " = undefined;");
+                else
+                    // Do need to declare it in the target code, but
+                    // don't need to initialize it
+                    cthis.emit("var " + targetID(ref.name) + ";");
+            }
+            for (var i = 0; i < node.length; i++)
+                recVar(node[i]);
+        }
+        recVar(sourceElements);
+
+        // Compile and initialize function declarations, now that we
+        // have a complete environment
+        for (var i = 0; i < sourceElements.length; i++) {
+            if (sourceElements[i]._type === "function") {
+                var id = this.cFunction(sourceElements[i]);
+                // cFunction already named and bound the function.
+                // This will override variable declarations, but
+                // that's actually okay because function declarations
+                // *do* shadow everything.  The only case where this
+                // isn't sufficient is in the global scope, where we
+                // have to turn the local binding into a global
+                // binding.
+                // XXX This is ugly
+                if (env.outer === null)
+                    this.emit("global." + sourceElements[i][0] + " = " + id + ";");
+            }
+        }
+
+        // XXX Do I need to lift out function expressions, too?
+        // Probably.  Otherwise every time I re-enter an execution
+        // function, the host will create a new function object.
+    };
+
+    // Emit code to return the value 'expr' from the current function.
+    Compiler.prototype.emitReturn = function(expr) {
+        this.emit("world._stack.pop();",
+                  "return " + expr + ";");
+    };
+
+    Compiler.prototype.cProgram = function(node) {
+        if (this._env)
+            throw "BUG: cProgram called with active scope";
+
+        // Global code prologue.  This will be the 'start' function of
+        // the final Code object.
+        this.emit("(function (world) {",
+                  "  'use strict';",
+                  "  var global = world.global;");
+
+        // Enter the global environment
+        this.emitEnterEnvironment(node[0]);
+
+        // Compile the body
+        this.cSourceElementList(node[0], "global");
+
+        // Declare allocated identifiers
+        // XXX So far all of these are for functions, so we don't need
+        // to declare them.
+        if (this._allocatedIDs.length > 0)
+            this.emit("  var " + this._allocatedIDs.join(", ") + ";");
+
+        // Global code epilogue
+        this.emit("  return exec;",
+                  "})");
+    };
+
+    Compiler.prototype.cFunction = function(node) {
+        if (!this._env)
+            throw "BUG: cFunction called without active scope";
+
+        // A source function compiles into two target functions: an
+        // environment constructor, which creates the function's
+        // runtime environment and can be invoked from target code as
+        // if it were the native function, and an execution function,
+        // which contains the compiled code for the body of the
+        // function and is nested in the environment constructor so it
+        // has access to the environment.  The environment constructor
+        // returns the execution function once it has set up the
+        // environment.  Function calls are implemented by pushing the
+        // desired execution function on the world's stack and
+        // returning to the execution loop.  Returns are implemented
+        // by popping the current function off the world's stack and
+        // returning the function's return value; the execution loop
+        // will call re-invoke the caller's execution function,
+        // passing the returned value as its argument, and the
+        // execution function will resume where it left off.
+        //
+        // XXX And a shim function
+
+        var id = node[0] ? targetID(node[0]) : this.newID();
+        var argList = [];
+        for (var i = 0; i < node[1].length; i++)
+            argList.push(targetID(node[1][i].v));
+
+        // Declare the shim function
+        this.emit("function " + id + "(" + argList.join(",") + ") {",
+                  // XXX
+                  "  throw 'Unimplemented: shim function';",
+                  "}");
+
+        // Function code prologue.  Declare the environment
+        // constructor.
+        // XXX If we really cared about isolation, this would not be
+        // okay, since source code could overwrite _jsjsf.  I could
+        // instead have just one function, record the function I'm
+        // intending to call in the world, and act like a shim if I'm
+        // not that function, or follow the JSJS convention if I am.
+        this.emit(id + "._jsjsf = function(" + argList.join(",") + ") {");
+
+        // Enter the function environment
+        this.emitEnterEnvironment(node[2], node[1]);
+
+        // Compile body
+        this.cSourceElementList(node[2], "function");
+
+        // Return the execution function
+        this.emit("  return exec;");
+
+        // Function code epilogue
+        this.emit("};")
+
+        // Exit the function environment
+        this._env = this._env.outer;
+
+        return id;
+    };
+
+    Compiler.prototype.cSourceElementList = function(nodes, mode) {
+        // Save context
+        var oldMaxreg = this._maxreg;
         this._maxreg = 0;
-        this._pc = 1;
-        this._bindings = [];
+
+        // Execution function prologue
+        ++this._pc;
+        this.emit("var pc = " + this._pc + ";",
+                  "var V;",
+                  "function exec(arg) {",
+                  "  while(true) {",
+                  "    switch (pc) {",
+                  "    case " + this._pc + ":");
+
         for (var i = 0; i < nodes.length; i++) {
             if (nodes[i]._type === "function")
-                throw "Unimplemented: function";
+                // These were already processed by the caller
+                continue;
             else
                 this.cStatement(nodes[i], null, null);
         }
-        var code = new Code(this.generate(), this._bindings);
-//        this._pieces = this._nreg = this._maxreg = this._pc = this._bindings = null;
-        return code;
+
+        // Implicit return.  If this is function code, return
+        // undefined; for global or eval code, return V.
+        if (mode === "function")
+            this.emitReturn("undefined");
+        else
+            this.emitReturn("V");
+
+        // Execution function epilogue
+        this.emit("    }",
+                  "  }",
+                  "}");
+
+        // Declare this execution function's registers
+        if (this._maxreg > 0) {
+            var code = "  var ";
+            for (var i = 0; i < this._maxreg; i++) {
+                if (i > 0)
+                    code += ", ";
+                code += "r" + i;
+            }
+            code += ";";
+            this.emit(code);
+        }
+
+        // Restore context
+        this._maxreg = oldMaxreg;
     };
 
     Compiler.prototype.cStatement = function(node, lCont, lBreak) {
@@ -804,15 +1086,9 @@ var jsjs = new function() {
         case "var":             // [ES5.1 12.2]
             for (var i = 0; i < node[0].length; i++) {
                 var id = node[0][i][0].v, val = node[0][i][1];
-                if (id === "eval" || id === "arguments")
-                    throw new SyntaxError(
-                        node[0][i],
-                        "Cannot assign " + id + " in strict mode");
                 if (val)
-                    this.putValue("env.getIdentifierReference('" + id + "')",
-                                  this.cExprTop(val));
-                if (this._bindings.indexOf(id) === -1)
-                    this._bindings.push(id);
+                    this.emitPutValue(this._env.getIdentifierReference(id),
+                                      this.cExprTop(val));
             }
             break;
 
@@ -824,7 +1100,7 @@ var jsjs = new function() {
             // statement value field.  It turns out that, even though
             // threading the statement value permeates the JavaScript
             // statement semantics, that threading is equivalent to
-            // just tracking the last statement expression value.
+            // just tracking the last expression statement value.
             this.assign("V", this.cExprTop(node[0]));
             break;
 
@@ -891,7 +1167,12 @@ var jsjs = new function() {
             break;
 
         case "return":          // [ES5.1 12.9]
-            throw "Unimplemented: return";
+            // XXX SyntaxError if not in a function
+            if (node[0] === null)
+                this.emitReturn("undefined");
+            else
+                this.emitReturn(this.cExprTop(node[0]));
+            break;
 
         case "with":            // [ES5.1 12.10]
             throw new SyntaxError(
@@ -936,6 +1217,7 @@ var jsjs = new function() {
         case "binop":
             notLHS();
             if (node._op === "&&" || node._op === "||") {
+                // [ES5.1 11.11] Binary logical operators
                 this.cExpr(node[0], reg);
                 if (node.op === "&&")
                     this.emit("if (!" + reg + ")");
@@ -946,39 +1228,63 @@ var jsjs = new function() {
                 this.cExpr(node[1], reg);
                 this.setLabel(label);
             } else if (node._op === "=") {
-                if (node[0]._type === "identifier" &&
-                    (node[0][0].v === "eval" || node[0][0].v === "arguments"))
+                // [ES5.1 11.13.1] Simple assignment
+                var lref = this.cExpr(node[0], null, true);
+                if (lref.name === "eval" || lref.name === "arguments")
                     throw new SyntaxError(node[0][0],
-                        "Cannot assign '" + node[0][0].v + "' in strict mode");
-                var l = this.cExpr(node[0], this.newReg(), true);
+                        "Cannot assign '" + lref.name + "' in strict mode");
                 var r = this.cExpr(node[1], reg);
-                this.putValue(l, r);
+                this.emitPutValue(lref, r);
             } else if (node._op[node._op.length - 1] === "=") {
                 // XXX Compound assignment
                 throw "Unimplemented: Compound assignment";
             } else if (node._op === ",") {
+                // [ES5.1 11.14] Comma operator
                 this.cExpr(node[0], reg);
                 this.cExpr(node[1], reg);
             } else {
+                // All other binary operators we hand to the host
                 var l = this.cExpr(node[0], reg);
                 var r = this.cExpr(node[1], this.newReg());
                 this.assign(l, l + " " + node._op + " " + r);
             }
             break;
 
-            // XXX unop, ternary, new, call, lookup, member
+            // XXX unop, ternary, new, lookup, member
+
+        case "call":
+            // XXX Handle "this"
+            // XXX If I exit controlled code, make sure we're not
+            // single-stepping any more (probably in shim function)
+            // XXX Not very robust to calling weird objects and such
+            var func = this.cExpr(node[0], reg);
+            var args = [];
+            for (var i = 0; i < node[1].length; i++)
+                args.push(this.cExpr(node[1][i], this.newReg()));
+            var argCode = "(" + args.join(",") + ")";
+            var retPC = ++this._pc;
+            this.emit("if (typeof " + reg + " == 'function' && '_jsjsf' in " + reg + ") {",
+                      "  world._stack.push({exec:" + reg + "._jsjsf" + argCode + "});",
+                      "  pc = " + retPC + ";",
+                      "  return;",
+                      "} else {",
+                      "  arg = " + reg + argCode + ";",
+                      "}",
+                      "case " + retPC + ":",
+                      // The value is "returned" in arg
+                      reg + " = arg;");
+            break;
 
         case "number": case "string": case "null": case "true": case "false":
             notLHS();
-            console.log(node);
             this.assign(reg, node[0].v);
             break;
 
         case "identifier":
-            this.assign(
-                reg, "env.getIdentifierReference('" + node[0].v + "')");
-            if (!needRef)
-                this.assign(reg, reg + ".getValue()");
+            var sref = this._env.getIdentifierReference(node[0].v);
+            if (needRef)
+                return sref;
+            this.emitGetValue(reg, sref);
             break;
 
             // XXX function, array, object
@@ -991,61 +1297,50 @@ var jsjs = new function() {
     };
 
     //////////////////////////////////////////////////////////////////
-    // Runtime support
+    // Runtime execution context
     //
 
-    // Construct a new Universe object.
+    // XXX What should the execution interface look like?
     //
-    // global must be the object to use as the global environment of
-    // this universe.
-    function Universe(global) {
-        this.env = new Environment(global, null);
-    }
-
-    // An environment record.  [ES5.1 10.2]
+    // new World(global object)
+    // world.eval(code) => stop reason
+    // world.continue() => stop reason
+    // world.step() => stop reason
     //
-    // This is used for both declarative and object environment
-    // records.
-    function Environment(object, outer) {
-        this.bindings = object;
-        this.outer = outer;
-    }
+    // world.load(code)  queue code to execute
+    //   code can be string or Code object
+    // world.continue()
+    // world.step()
 
-    // Get a Reference to identifier name.  [ES5.1 10.2.2.1]
+    // Construct a new World object for executing JavaScript code.
     //
-    // In contrast with the spec, 'lex' is implied by the Environment
-    // on which this is called.  'strict' is always true.
-    Environment.prototype.getIdentifierReference = function(name) {
-        var lex = this;
-        while (lex !== null) {
-            if (name in lex.bindings)
-                return new Reference(lex.bindings, name);
-            lex = lex.outer;
-        }
-        return new Reference(undefined, name);
+    // global must be the object to use as the global environment for
+    // this code.  code must be a string or Code object to be
+    // executed.
+    function World(global, code) {
+        this.global = global;
+        if (typeof code === "string")
+            code = compile(code);
+        this._singleStep = false;
+        // Call stack
+        this._stack = [{exec: code.start(this)}];
+        this._last = undefined;
     }
+    this.World = World;
 
-    // The Reference specification type [ES5.1 8.7].  We only
-    // implement strict mode, so IsStrictReference is always true.
-    function Reference(base, name) {
-        this.base = base;
-        this.name = name;
-    }
-
-    // The GetValue algorithm [ES5.1 8.7.1].
-    Reference.prototype.getValue = function() {
-        if (this.base === undefined)
-            throw "ReferenceError: " + this.name;
-        // XXX Is this complete?
-        return this.base[this.name];
+    World.prototype.cont = function() {
+        this._singleStep = false;
+        this._run();
+        return this._last;
     };
 
-    // The PutValue algorithm [ES5.1 8.7.2].
-    Reference.prototype.putValue = function(w) {
-        if (this.base === undefined)
-            throw "ReferenceError: " + this.name;
-        // XXX Is this complete?
-        this.base[this.name] = w;
+    World.prototype._run = function() {
+        this._running = true;
+        while (this._running && this._stack.length) {
+            var frame = this._stack[this._stack.length - 1];
+            this._last = frame.exec(this._last);
+        }
+        this._running = false;
     };
 
     //////////////////////////////////////////////////////////////////
@@ -1118,3 +1413,11 @@ var jsjs = new function() {
     // This grammar actually works fine if we prefer the first branch
     // of LeftHandSideExpression.  XXX Wrong.  "x().y()"
 };
+
+c = new jsjs.Compiler();
+//c.cProgram(jsjs.parse("{var x = 1 + 2, y = x + 3; if (x) y = 2;}"));
+c.cProgram(jsjs.parse("var x = 1; function foo(y) {return x+y;} foo(41);"));
+//c.cProgram(jsjs.parse(str));
+global = {};
+w = new jsjs.World(global, c.getCode());
+console.log(w.cont());
