@@ -1310,10 +1310,13 @@ var jsjs = new function() {
         case "this":
             return "$this";
 
-        case "number": case "string": case "null": case "true": case "false":
+        case "number": case "string":
             var out = this.newReg();
             this.assign(out, node[0].v);
             return out;
+
+        case "null": case "true": case "false":
+            return node._type;
 
         case "identifier":
             return this._env.getIdentifierReference(node[0].v);
