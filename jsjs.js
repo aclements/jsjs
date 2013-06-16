@@ -725,6 +725,10 @@ var jsjs = new function() {
         this.name = name;
     }
 
+    StaticReference.prototype.isEnvRef = function() {
+        return this.base === ".local" || this.base === "global";
+    };
+
     function Compiler() {
         this._pieces = [];
         this._nreg = null;
@@ -1011,7 +1015,7 @@ var jsjs = new function() {
         // instead have just one function, record the function I'm
         // intending to call in the world, and act like a shim if I'm
         // not that function, or follow the JSJS convention if I am.
-        this.emit(id + "._jsjsf = function(" + argList.join(",") + ") {");
+        this.emit(id + "._jsjsf = function($this, " + argList.join(",") + ") {");
 
         // Enter the function environment
         this.emitEnterEnvironment(node[2], node[1]);
@@ -1236,7 +1240,7 @@ var jsjs = new function() {
                 if (!(lref instanceof StaticReference))
                     throw new SyntaxError(
                         node[0], "Not a left hand side expression");
-                if ((lref.base === ".local" || lref.base === "global") &&
+                if (lref.isEnvRef() &&
                     (lref.name === "eval" || lref.name === "arguments"))
                     throw new SyntaxError(node[0],
                         "Cannot assign '" + lref.name + "' in strict mode");
@@ -1272,7 +1276,12 @@ var jsjs = new function() {
             // XXX Not very robust to calling weird objects and such
             var ref = this.cExpr(node[0]);
             var func = this.emitGetValue(ref);
-            var args = [];
+            var thisValue;
+            if (ref instanceof StaticReference && !ref.isEnvRef())
+                thisValue = ref.base;
+            else
+                thisValue = "undefined";
+            var args = [thisValue];
             for (var i = 0; i < node[1].length; i++)
                 args.push(this.emitGetValue(this.cExpr(node[1][i])));
             var argCode = "(" + args.join(",") + ")";
@@ -1285,7 +1294,7 @@ var jsjs = new function() {
                       "  pc = " + retPC + ";",
                       "  return;",
                       "} else {",
-                      "  arg = " + func + argCode + ";",
+                      "  arg = " + func + ".call" + argCode + ";",
                       "}",
                       "case " + retPC + ":",
                       // The value is "returned" in arg
@@ -1297,6 +1306,9 @@ var jsjs = new function() {
             var name = node[1].v;
             // XXX CheckObjectCoercible?
             return new StaticReference(baseValue, name);
+
+        case "this":
+            return "$this";
 
         case "number": case "string": case "null": case "true": case "false":
             var out = this.newReg();
