@@ -789,8 +789,13 @@ var jsjs = new function() {
                   "case " + pc + ":");
     };
 
-    // Emit code to dereference sref into reg.  [ES5.1 8.7.1]
-    Compiler.prototype.emitGetValue = function(reg, sref) {
+    // Emit code to dereference sref, which may be a StaticReference
+    // or a target code expression.  Returns a target code expression
+    // for the resulting value.  [ES5.1 8.7.1]
+    Compiler.prototype.emitGetValue = function(sref) {
+        if (!(sref instanceof StaticReference))
+            return sref;
+        var reg = this.newReg();
         if (sref.base === ".local") {
             this.assign(reg, targetID(sref.name));
         } else {
@@ -802,6 +807,7 @@ var jsjs = new function() {
                           "  throw 'ReferenceError';");
             this.assign(reg, sref.base + "." + sref.name);
         }
+        return reg;
     };
 
     // Emit code to store the value of expr in sref.  [ES5.1 8.7.2]
@@ -1204,100 +1210,101 @@ var jsjs = new function() {
 
     Compiler.prototype.cExprTop = function(node) {
         this._nreg = 0;
-        var out = this.cExpr(node, this.newReg(), false);
+        var out = this.cExpr(node);
         this._nreg = null;
         return out;
     };
 
-    Compiler.prototype.cExpr = function(node, reg, needRef) {
-        function notLHS() {
-            if (needRef)
-                throw "Not a left hand side expression"; // XXX
-        }
-
+    Compiler.prototype.cExpr = function(node) {
         switch (node._type) {
         case "binop":
-            notLHS();
             if (node._op === "&&" || node._op === "||") {
                 // [ES5.1 11.11] Binary logical operators
-                this.cExpr(node[0], reg);
+                var lval = this.emitGetValue(this.cExpr(node[0]));
                 if (node.op === "&&")
-                    this.emit("if (!" + reg + ")");
+                    this.emit("if (!" + lval + ")");
                 else
-                    this.emit("if (" + reg + ")");
+                    this.emit("if (" + lval + ")");
                 var label = this.newLabel();
                 this.emitJump(label);
-                this.cExpr(node[1], reg);
+                var rval = this.emitGetValue(this.cExpr(node[1]));
                 this.setLabel(label);
+                return rval;
             } else if (node._op === "=") {
                 // [ES5.1 11.13.1] Simple assignment
-                var lref = this.cExpr(node[0], null, true);
-                if (lref.name === "eval" || lref.name === "arguments")
-                    throw new SyntaxError(node[0][0],
+                var lref = this.cExpr(node[0]);
+                if (!(lref instanceof StaticReference))
+                    throw new SyntaxError(
+                        node[0], "Not a left hand side expression");
+                if ((lref.base === ".local" || lref.base === "global") &&
+                    (lref.name === "eval" || lref.name === "arguments"))
+                    throw new SyntaxError(node[0],
                         "Cannot assign '" + lref.name + "' in strict mode");
-                var r = this.cExpr(node[1], reg);
-                this.emitPutValue(lref, r);
+                var rval = this.emitGetValue(this.cExpr(node[1]));
+                this.emitPutValue(lref, rval);
+                return rval;
             } else if (node._op[node._op.length - 1] === "=") {
                 // XXX Compound assignment
                 throw "Unimplemented: Compound assignment";
             } else if (node._op === ",") {
                 // [ES5.1 11.14] Comma operator
-                this.cExpr(node[0], reg);
-                this.cExpr(node[1], reg);
+                this.emitGetValue(this.cExpr(node[0]));
+                return this.emitGetValue(this.cExpr(node[1]));
             } else {
                 // All other binary operators we hand to the host
-                var l = this.cExpr(node[0], reg);
-                var r = this.cExpr(node[1], this.newReg());
-                this.assign(l, l + " " + node._op + " " + r);
+                var lval = this.emitGetValue(this.cExpr(node[0]));
+                var rval = this.emitGetValue(this.cExpr(node[1]));
+                this.assign(lval, lval + " " + node._op + " " + rval);
+                return lval;
             }
             break;
 
             // XXX unop, ternary, new, lookup
 
         case "call":
-            // XXX Handle "this"
+            // XXX Handle "this".  This is going to require being able
+            // to ask for a reference but not require one.  I could
+            // remove needRef, since I can now distinguish values from
+            // references statically and thus emit an optimal getValue
+            // for values.
             // XXX If I exit controlled code, make sure we're not
             // single-stepping any more (probably in shim function)
             // XXX Not very robust to calling weird objects and such
-            var func = this.cExpr(node[0], reg);
+            var ref = this.cExpr(node[0]);
+            var func = this.emitGetValue(ref);
             var args = [];
             for (var i = 0; i < node[1].length; i++)
-                args.push(this.cExpr(node[1][i], this.newReg()));
+                args.push(this.emitGetValue(this.cExpr(node[1][i])));
             var argCode = "(" + args.join(",") + ")";
             var retPC = ++this._pc;
-            this.emit("if (typeof " + reg + " == 'function' && '_jsjsf' in " + reg + ") {",
-                      "  world._stack.push({exec:" + reg + "._jsjsf" + argCode + "});",
+            var out = func;
+            this.emit("if (typeof " + func + " == 'function' && '_jsjsf' in " + func + ") {",
+                      // XXX The environment constructor could push
+                      // the execution function itself.
+                      "  world._stack.push({exec:" + func + "._jsjsf" + argCode + "});",
                       "  pc = " + retPC + ";",
                       "  return;",
                       "} else {",
-                      "  arg = " + reg + argCode + ";",
+                      "  arg = " + func + argCode + ";",
                       "}",
                       "case " + retPC + ":",
                       // The value is "returned" in arg
-                      reg + " = arg;");
-            break;
+                      out + " = arg;");
+            return out;
 
         case "member":
-            var base = this.cExpr(node[0], reg || this.newReg());
+            var baseValue = this.emitGetValue(this.cExpr(node[0]));
             var name = node[1].v;
             // XXX CheckObjectCoercible?
-            var sref = new StaticReference(base, name);
-            if (needRef)
-                return sref;
-            this.emitGetValue(reg, sref);
-            break;
+            return new StaticReference(baseValue, name);
 
         case "number": case "string": case "null": case "true": case "false":
-            notLHS();
-            this.assign(reg, node[0].v);
-            break;
+            var out = this.newReg();
+            this.assign(out, node[0].v);
+            return out;
 
         case "identifier":
-            var sref = this._env.getIdentifierReference(node[0].v);
-            if (needRef)
-                return sref;
-            this.emitGetValue(reg, sref);
-            break;
+            return this._env.getIdentifierReference(node[0].v);
 
             // XXX function, array, object
 
@@ -1305,7 +1312,7 @@ var jsjs = new function() {
             throw "BUG: Unhandled expr node " + node._type;
         }
 
-        return reg;
+        throw "BUG: Unreachable";
     };
 
     //////////////////////////////////////////////////////////////////
