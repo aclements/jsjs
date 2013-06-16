@@ -615,8 +615,8 @@ var jsjs = new function() {
         // XXX RegularExpressionLiteral
         switch (next.v) {
         case "function":
-            var node = this._node("function");
-            node.alt(".identifier");
+            var node = this._node("function").type("functionExpression");
+            node.alt(".identifier") || node.push(null);
             node.consume("( .identifier,* ) { @pSourceElement* }");
             return node;
         case "this": case "null": case "true": case "false":
@@ -924,7 +924,10 @@ var jsjs = new function() {
         recVar(sourceElements);
 
         // Compile and initialize function declarations, now that we
-        // have a complete environment
+        // have a complete environment.  This will create one function
+        // object per entry to this code, which is what we want.  In
+        // contrast, function expressions create their function object
+        // when they are evaluated, so we can't lift them out.
         for (var i = 0; i < sourceElements.length; i++) {
             if (sourceElements[i]._type === "function") {
                 var id = this.cFunction(sourceElements[i]);
@@ -940,10 +943,6 @@ var jsjs = new function() {
                     this.emit("global." + sourceElements[i][0] + " = " + id + ";");
             }
         }
-
-        // XXX Do I need to lift out function expressions, too?
-        // Probably.  Otherwise every time I re-enter an execution
-        // function, the host will create a new function object.
     };
 
     // Emit code to return the value 'expr' from the current function.
@@ -1002,16 +1001,28 @@ var jsjs = new function() {
         //
         // XXX And a shim function
 
-        var id = node[0] ? targetID(node[0]) : this.newID();
+        var isExpr = node._type === "functionExpression";
+        if (isExpr && node[0])
+            throw "Unimplemented: Named function expressions";
+        else if (isExpr)
+            var id = this.newReg();
+        else
+            var id = targetID(node[0]);
         var argList = [];
         for (var i = 0; i < node[1].length; i++)
             argList.push(targetID(node[1][i].v));
 
         // Declare the shim function
-        this.emit("function " + id + "(" + argList.join(",") + ") {",
-                  // XXX
-                  "  throw 'Unimplemented: shim function';",
-                  "}");
+        if (isExpr)
+            this.emit(id + " = (function(" + argList.join(",") + ") {");
+        else
+            this.emit("function " + id + "(" + argList.join(",") + ") {");
+        // XXX
+        this.emit("  throw 'Unimplemented: shim function';");
+        if (isExpr)
+            this.emit("});");
+        else
+            this.emit("}");
 
         // Function code prologue.  Declare the environment
         // constructor.
@@ -1041,9 +1052,11 @@ var jsjs = new function() {
     };
 
     Compiler.prototype.cSourceElementList = function(nodes, mode) {
-        // Save context
-        var oldMaxreg = this._maxreg;
+        // Save context.  We have to save nreg in case we're compiling
+        // a function expression.
+        var oldMaxreg = this._maxreg, oldNreg = this._nreg;
         this._maxreg = 0;
+        this._nreg = null;
 
         // Execution function prologue
         ++this._pc;
@@ -1094,6 +1107,7 @@ var jsjs = new function() {
 
         // Restore context
         this._maxreg = oldMaxreg;
+        this._nreg = oldNreg;
     };
 
     Compiler.prototype.cStatement = function(node, lCont, lBreak) {
@@ -1372,7 +1386,8 @@ var jsjs = new function() {
         case "identifier":
             return this._env.getIdentifierReference(node[0].v);
 
-            // XXX function
+        case "functionExpression":
+            return this.cFunction(node);
 
         case "array":
             var out = this.newReg();
