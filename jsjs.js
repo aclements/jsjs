@@ -1015,7 +1015,7 @@ var jsjs = new function() {
         // instead have just one function, record the function I'm
         // intending to call in the world, and act like a shim if I'm
         // not that function, or follow the JSJS convention if I am.
-        this.emit(id + "._jsjsf = function($this, " + argList.join(",") + ") {");
+        this.emit(id + "._jsjsf = function(" + argList.join(",") + ") {");
 
         // Enter the function environment
         this.emitEnterEnvironment(node[2], node[1]);
@@ -1042,6 +1042,12 @@ var jsjs = new function() {
 
         // Execution function prologue
         ++this._pc;
+        if (mode === "function")
+            this.emit("var $this = this;");
+        else if (mode === "global")
+            this.emit("var $this = global;");
+        else
+            throw "Unimplemented: eval";
         this.emit("var pc = " + this._pc + ";",
                   "var V;",
                   "function exec(arg) {",
@@ -1266,11 +1272,6 @@ var jsjs = new function() {
             // XXX unop, ternary, new, lookup
 
         case "call":
-            // XXX Handle "this".  This is going to require being able
-            // to ask for a reference but not require one.  I could
-            // remove needRef, since I can now distinguish values from
-            // references statically and thus emit an optimal getValue
-            // for values.
             // XXX If I exit controlled code, make sure we're not
             // single-stepping any more (probably in shim function)
             // XXX Not very robust to calling weird objects and such
@@ -1290,7 +1291,7 @@ var jsjs = new function() {
             this.emit("if (typeof " + func + " == 'function' && '_jsjsf' in " + func + ") {",
                       // XXX The environment constructor could push
                       // the execution function itself.
-                      "  world._stack.push({exec:" + func + "._jsjsf" + argCode + "});",
+                      "  world._stack.push({exec:" + func + "._jsjsf.call" + argCode + "});",
                       "  pc = " + retPC + ";",
                       "  return;",
                       "} else {",
