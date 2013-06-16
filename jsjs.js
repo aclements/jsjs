@@ -640,7 +640,7 @@ var jsjs = new function() {
         case "{":
             return this._node("{ @pPropertyAssignment,* }").type("object");
         case "(":
-            return this._node("( @pExpression )")[1];
+            return this._node("( @pExpression )")[0];
         }
         this._throwExpect("primary expression");
     };
