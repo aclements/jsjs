@@ -618,7 +618,7 @@ var jsjs = new function() {
             return this._node(next.v);
         case "[":
             var node = this._node("[").type("array");
-            var list = this._node();
+            var list = this._node().type("list");
             node.push(list);
             while (true) {
                 if (!list.alt("@pAssignmentExpression"))
@@ -1321,7 +1321,21 @@ var jsjs = new function() {
         case "identifier":
             return this._env.getIdentifierReference(node[0].v);
 
-            // XXX function, array, object
+            // XXX function
+
+        case "array":
+            var out = this.newReg();
+            this.assign(out, "[]");
+            if (node[0].length > 0) {
+                this.emit(out + ".length = " + node[0].length + ";");
+                for (var i = 0; i < node[0].length; i++)
+                    if (node[0][i] !== null)
+                        this.emit(out + "[" + i + "] = " +
+                                  this.emitGetValue(this.cExpr(node[0][i])));
+            }
+            return out;
+
+            // XXX object
 
         default:
             throw "BUG: Unhandled expr node " + node._type;
