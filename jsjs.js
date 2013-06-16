@@ -532,7 +532,7 @@ var jsjs = new function() {
         var next = this._peek();
         if (unopsR[next.v] === prec) {
             // Right-associative (prefix) unary operators
-            node = this._node(next.v).type("unop", next.v);
+            node = this._node(next.v).type("unopR", next.v);
             node.push(this.pExpressionN(next.v==="new" ? "noCall" : arg, prec));
             // Is this a 'new a()' expression?  We disallow calls when
             // parsing a new so we can special-case this.
@@ -550,13 +550,18 @@ var jsjs = new function() {
         while (true) {
             var next = this._peek();
 
-            if (binops[next.v] !== prec && unopsL[next.v] !== prec)
+            if (binops[next.v] === prec)
+                var type = "binop";
+            else if (unopsL[next.v] === prec)
+                var type = "unopL";
+            else
                 return node;
+
             if (next.v === "in" && arg === "noIn")
                 return node;
             if (next.v === "(" && arg === "noCall")
                 return node;
-            var nnode = this._node().type("binop", next.v);
+            var nnode = this._node().type(type, next.v);
             nnode.push(node);
             node = nnode;
             node.consume(next.v);
@@ -1226,6 +1231,17 @@ var jsjs = new function() {
     };
 
     Compiler.prototype.cExpr = function(node) {
+        function preassign(sref, refnode) {
+            if (!(sref instanceof StaticReference))
+                throw new SyntaxError(
+                    refnode, "Not a left hand side expression");
+            if (sref.isEnvRef() &&
+                (sref.name === "eval" || sref.name === "arguments"))
+                throw new SyntaxError(
+                    refnode,
+                    "Cannot assign '" + sref.name + "' in strict mode");
+        }
+
         switch (node._type) {
         case "binop":
             if (node._op === "&&" || node._op === "||") {
@@ -1243,13 +1259,7 @@ var jsjs = new function() {
             } else if (node._op === "=") {
                 // [ES5.1 11.13.1] Simple assignment
                 var lref = this.cExpr(node[0]);
-                if (!(lref instanceof StaticReference))
-                    throw new SyntaxError(
-                        node[0], "Not a left hand side expression");
-                if (lref.isEnvRef() &&
-                    (lref.name === "eval" || lref.name === "arguments"))
-                    throw new SyntaxError(node[0],
-                        "Cannot assign '" + lref.name + "' in strict mode");
+                preassign(lref);
                 var rval = this.emitGetValue(this.cExpr(node[1]));
                 this.emitPutValue(lref, rval);
                 return rval;
@@ -1269,7 +1279,47 @@ var jsjs = new function() {
             }
             break;
 
-            // XXX unop, ternary, new, lookup
+        case "unopR":
+        case "unopL":
+            if (node._op === "++" || node._op === "--") {
+                var expr = this.cExpr(node[0]);
+                preassign(expr, node[0]);
+                var oldValue = this.emitGetValue(expr);
+                this.assign(oldValue, "+" + oldValue);
+                var newValue = this.newReg();
+                this.assign(newValue, oldValue + node._op[0] + "1");
+                this.emitPutValue(expr, newValue);
+                if (node._type === "unopR")
+                    return newValue;
+                else
+                    return oldValue;
+            } else if (node._op === "delete") {
+                var ref = this.cExpr(node[0]);
+                if (!(ref instanceof StaticReference)) {
+                    return "true";
+                } else if (ref.isEnvRef()) {
+                    throw new SyntaxError(
+                        node[0],
+                        "Cannot delete unqualified identifier in strict mode");
+                } else {
+                    var out = this.newReg();
+                    // XXX Won't work with lookup references
+                    this.assign(out, "delete " + ref.base + "." + ref.name);
+                    return out;
+                }
+            } else if (node._op === "void") {
+                this.emitGetValue(this.cExpr(node[0]));
+                return "undefined";
+            } else if (node._type === "unopR") {
+                // All other unary operators we hand to the host
+                var expr = this.cExpr(node[0]);
+                var out = this.newReg();
+                this.assign(out, node._op + " " + this.emitGetValue(expr));
+                return out;
+            }
+            break;
+
+            // XXX ternary, new, lookup
 
         case "call":
             // XXX If I exit controlled code, make sure we're not
