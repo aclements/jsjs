@@ -1553,22 +1553,35 @@ var jsjs = new function() {
     // Construct a new World object for executing JavaScript code.
     //
     // global must be the object to use as the global environment for
-    // this code.  code must be a string or Code object to be
-    // executed.
+    // this code.  code, if provided, must be a string or Code object
+    // to push on the execution stack.
     function World(global, code) {
         this.global = global;
-        if (typeof code === "string")
-            code = compile(code);
         this._singleStep = false;
         // Call stack
-        this._stack = [{exec: code.start(this)}];
+        this._stack = [];
         // The value returned by the last execution function
         this._last = undefined;
         // The target Function object of the current call
         this._target = null;
+
+        if (code)
+            this.enter(code);
     }
     this.World = World;
 
+    // Push code on the execution stack.  The next time this world is
+    // started, it will start to execute code.  code must be a string
+    // or Code object.  This returns 'this', so it can be chained.
+    World.prototype.enter = function(code) {
+        if (typeof code === "string")
+            code = compile(code);
+        this._stack.push({exec: code.start(this)});
+        return this;
+    };
+
+    // Continue execution.  This will return the value returned by the
+    // executed code.
     World.prototype.cont = function() {
         this._singleStep = false;
         this._run();
