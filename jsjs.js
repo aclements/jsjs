@@ -104,7 +104,7 @@ var jsjs = new function() {
 
     // Tokenize the Javascript source in str, returning an array of
     // Tok objects.
-    this.tokenize = function(str) {
+    function tokenize(str) {
         var toks = [];
         var line = 1, col = 0;
         tokre.lastIndex = 0;
@@ -138,7 +138,7 @@ var jsjs = new function() {
         }
         toks.push(new Tok("", "EOF", line, col));
         return toks;
-    };
+    }
 
     //////////////////////////////////////////////////////////////////
     // Parser
@@ -304,13 +304,12 @@ var jsjs = new function() {
         return res + ")";
     };
 
-    this.Parser = function(toks) {
+    function Parser(toks) {
         this._toks = toks;
         this._pos = 0;
         this._errors = null;
         this._errorPos = -1;
     };
-    var Parser = this.Parser;
 
     Parser.prototype._throwExpect = function(name) {
         if (this._pos !== this._errorPos) {
@@ -1589,11 +1588,19 @@ var jsjs = new function() {
     // External interface
     //
 
-    this.parse = function(str) {
-        var toks = this.tokenize(str);
-        var p = new this.Parser(toks);
+    function parse(str) {
+        var toks = tokenize(str);
+        var p = new Parser(toks);
         return p.pProgram();
     };
+    this.parse = parse;
+
+    function compile(str) {
+        var c = new Compiler();
+        c.cProgram(parse(str));
+        return c.getCode();
+    };
+    this.compile = compile;
 
     // Horrible things I have learned about JavaScript:
     //
