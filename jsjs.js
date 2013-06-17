@@ -990,35 +990,48 @@ var jsjs = new function() {
         if (!this._env)
             throw "BUG: cFunction called without active scope";
 
-        // A source function compiles into three target functions:
+        // A source function compiles into two target functions with
+        // three code paths:
         //
-        // 1) A shim function.  This is the function body that will be
-        //    invoked by host code.  It acts as a bridge from the
-        //    normal JavaScript calling convention to executing
-        //    compiled code.
+        // 1) The main function.  This is the Function object that
+        //    represents this function.  It should be called following
+        //    the normal JavaScript conventions with "this" and
+        //    arguments as expected.  When invoked from JSJS code, the
+        //    value of world._target must equal this function.  It has
+        //    two code paths.
         //
-        // 2) An environment constructor.  This function is stored in
-        //    the _jsjsf property of the created Function object.  It
-        //    should be called with "this" and arguments just like a
-        //    native JavaScript function, but it only creates the
-        //    lexical environment for the function, pushes the
-        //    execution function on to the call stack, and returns.
+        // 1.1) The shim path will be taken if the main function is
+        //      called by native code.  It bridges the normal
+        //      JavaScript calling convention by starting its own
+        //      execution loop.  Single-stepping is not possible on
+        //      the shim path because JavaScript's calling convention
+        //      can't represent single-stepping.
         //
-        // 3) A execution function.  This is the compiled form of the
+        // 1.2) The environment constructor path will be taken if this
+        //      function is called by JSJS code.  It clears
+        //      world._target, creates the lexical environment for the
+        //      function, pushes the execution function on to the call
+        //      stack, and returns world._escape.
+        //
+        // 2) An execution function.  This is the compiled form of the
         //    body of the function.  In the target code, it's
         //    lexically nested in the environment constructor so it
         //    can access its runtime lexical environment directly
         //    using host mechanisms.  This function can return to the
         //    execution loop at any time, since it keeps track of
-        //    where in the function it is.
+        //    where in the function it is.  To implement a source code
+        //    return, this pops itself off the call stack and returns
+        //    the function's result to the execution loop, which will
+        //    re-enter the calling execution function, passing the
+        //    returned value as its argument.
         //
-        // Function calls are implemented by calling the environment
-        // constructor and then returning to the execution loop.
-        // Function returns are implemented by popping the current
-        // execution function off the call stack and returning the
-        // function's return value; the execution loop will then
-        // re-enter the calling execution function, passing the
-        // returned value as its argument.
+        // world._target and world._escape act as a handshake that
+        // allows native code to call JSJS functions and JSJS code to
+        // call both JSJS functions and native functions.  The caller
+        // sets world._target to indicate to JSJS functions that it
+        // can handle the JSJS calling convention, while the callee
+        // returns world._escape to indicate to a JSJS caller that it
+        // is following the JSJS calling convention.
 
         var isExpr = node._type === "functionExpression";
         if (isExpr && node[0])
@@ -1031,26 +1044,21 @@ var jsjs = new function() {
         for (var i = 0; i < node[1].length; i++)
             argList.push(targetID(node[1][i].v));
 
-        // Declare the shim function
+        // Function code prologue.  Shim/environment constructor
         if (isExpr)
             this.emit(id + " = (function(" + argList.join(",") + ") {");
         else
             this.emit("function " + id + "(" + argList.join(",") + ") {");
-        // XXX
-        this.emit("  throw 'Unimplemented: shim function';");
-        if (isExpr)
-            this.emit("});");
-        else
-            this.emit("}");
 
-        // Function code prologue.  Declare the environment
-        // constructor.
-        // XXX If we really cared about isolation, this would not be
-        // okay, since source code could overwrite _jsjsf.  I could
-        // instead have just one function, record the function I'm
-        // intending to call in the world, and act like a shim if I'm
-        // not that function, or follow the JSJS convention if I am.
-        this.emit(id + "._jsjsf = function(" + argList.join(",") + ") {");
+        // If the current call target isn't this function, then we
+        // were invoked by native code, so go through the shim.
+        // XXX
+        this.emit("  if (world._target !== " + id + ")",
+                  "    throw 'Unimplemented: shim function';");
+
+        // The current call target is this function, so follow the
+        // JSJS calling convention.
+        this.emit("  world._target = null;");
 
         // Enter the function environment
         this.emitEnterEnvironment(node[2], node[1]);
@@ -1061,8 +1069,15 @@ var jsjs = new function() {
         // Push the execution function on the call stack
         this.emit("  world._stack.push({exec:exec});");
 
+        // Return the escape singleton to indicate that this was an
+        // execution function
+        this.emit("  return world._escape;");
+
         // Function code epilogue
-        this.emit("};")
+        if (isExpr)
+            this.emit("});");
+        else
+            this.emit("}");
 
         // Exit the function environment
         this._env = this._env.outer;
@@ -1400,13 +1415,11 @@ var jsjs = new function() {
             var argCode = "(" + args.join(",") + ")";
             var retPC = ++this._pc;
             var out = func;
-            this.emit("if (typeof " + func + " == 'function' && '_jsjsf' in " + func + ") {",
-                      "  " + func + "._jsjsf.call" + argCode + ";",
-                      "  pc = " + retPC + ";",
-                      "  return;",
-                      "} else {",
-                      "  arg = " + func + ".call" + argCode + ";",
-                      "}",
+            this.emit("world._target = " + func + ";",
+                      "arg = " + func + ".call" + argCode + ";",
+                      "world._target = null;",
+                      "pc = " + retPC + ";",
+                      "if (arg === world._escape) return;",
                       "case " + retPC + ":",
                       // The value is "returned" in arg
                       out + " = arg;");
@@ -1520,7 +1533,12 @@ var jsjs = new function() {
         this._singleStep = false;
         // Call stack
         this._stack = [{exec: code.start(this)}];
+        // The value returned by the last execution function
         this._last = undefined;
+        // The target Function object of the current call
+        this._target = null;
+        // The escape singleton
+        this._escape = {};
     }
     this.World = World;
 
