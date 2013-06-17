@@ -724,14 +724,30 @@ var jsjs = new function() {
     // delegate local identifier handling to the base JavaScript
     // engine.  This also doesn't distinguish unresolvable references
     // from global references because that determination can only be
-    // made a runtime.
-    function StaticReference(base, name) {
+    // made a runtime.  If this reference's name is an identifier,
+    // name must be specified; if this reference's name is dynamic,
+    // nameExpr must be a target code expression that will evaluate to
+    // the name.
+    function StaticReference(base, name, nameExpr) {
         this.base = base;
         this.name = name;
+        this.nameExpr = nameExpr;
+        if (this.isEnvRef() && !name)
+            throw "BUG: Local and global references must have an identifier";
     }
 
     StaticReference.prototype.isEnvRef = function() {
         return this.base === ".local" || this.base === "global";
+    };
+
+    StaticReference.prototype.expr = function() {
+        if (this.base === ".local")
+            return targetID(this.name);
+        if (this.name)
+            return this.base + "." + this.name;
+        if (this.nameExpr)
+            return this.base + "[" + this.nameExpr + "]";
+        throw "BUG: Reference has neither name or expr";
     };
 
     function Compiler() {
@@ -805,31 +821,23 @@ var jsjs = new function() {
         if (!(sref instanceof StaticReference))
             return sref;
         var reg = this.newReg();
-        if (sref.base === ".local") {
-            this.assign(reg, targetID(sref.name));
-        } else {
-            // If this is a global variable, we need a dynamic check
-            // for unresolvable references.
-            if (sref.base === "global")
-                // XXX Proper exception
-                this.emit("if (!('" + sref.name + "' in global))",
-                          "  throw 'ReferenceError';");
-            this.assign(reg, sref.base + "." + sref.name);
-        }
+        // If this is a global variable, we need a dynamic check for
+        // unresolvable references.
+        if (sref.base === "global")
+            // XXX Proper exception
+            this.emit("if (!('" + sref.name + "' in global))",
+                      "  throw 'ReferenceError';");
+        this.assign(reg, sref.expr());
         return reg;
     };
 
     // Emit code to store the value of expr in sref.  [ES5.1 8.7.2]
     Compiler.prototype.emitPutValue = function(sref, expr) {
-        if (sref.base === ".local") {
-            this.assign(targetID(sref.name), expr);
-        } else {
-            if (sref.base === "global")
-                // XXX Proper exception
-                this.emit("if (!('" + sref.name + "' in global))",
-                          "  throw 'ReferenceError';");
-            this.assign(sref.base + "." + sref.name, expr);
-        }
+        if (sref.base === "global")
+            // XXX Proper exception
+            this.emit("if (!('" + sref.name + "' in global))",
+                      "  throw 'ReferenceError';");
+        this.assign(sref.expr(), expr);
     };
 
     Compiler.prototype.generate = function() {
@@ -912,11 +920,11 @@ var jsjs = new function() {
                 var ref = declare(node[0], {type:"var"});
                 if (ref.base === "global")
                     // Declare and initialize it.
-                    cthis.emit("global." + ref.name + " = undefined;");
+                    cthis.emit(ref.expr() + " = undefined;");
                 else
                     // Do need to declare it in the target code, but
                     // don't need to initialize it
-                    cthis.emit("var " + targetID(ref.name) + ";");
+                    cthis.emit("var " + ref.expr() + ";");
             }
             for (var i = 0; i < node.length; i++)
                 recVar(node[i]);
@@ -1317,8 +1325,7 @@ var jsjs = new function() {
                         "Cannot delete unqualified identifier in strict mode");
                 } else {
                     var out = this.newReg();
-                    // XXX Won't work with lookup references
-                    this.assign(out, "delete " + ref.base + "." + ref.name);
+                    this.assign(out, "delete " + ref.expr());
                     return out;
                 }
             } else if (node._op === "void") {
@@ -1333,7 +1340,7 @@ var jsjs = new function() {
             }
             break;
 
-            // XXX ternary, new, lookup
+            // XXX ternary, new
 
         case "call":
             // XXX If I exit controlled code, make sure we're not
@@ -1365,6 +1372,14 @@ var jsjs = new function() {
                       // The value is "returned" in arg
                       out + " = arg;");
             return out;
+
+        case "lookup":
+            var baseValue = this.emitGetValue(this.cExpr(node[0]));
+            var propertyNameValue = this.emitGetValue(this.cExpr(node[1]));
+            // XXX CheckObjectCoercible?
+            var propertyNameString = this.newReg();
+            this.assign(propertyNameString, "''+" + propertyNameValue);
+            return new StaticReference(baseValue, null, propertyNameString);
 
         case "member":
             var baseValue = this.emitGetValue(this.cExpr(node[0]));
