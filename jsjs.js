@@ -1401,7 +1401,6 @@ var jsjs = new function() {
         case "call":
             // XXX If I exit controlled code, make sure we're not
             // single-stepping any more (probably in shim function)
-            // XXX Not very robust to calling weird objects and such
             var ref = this.cExpr(node[0]);
             var func = this.emitGetValue(ref);
             var thisValue;
@@ -1415,7 +1414,10 @@ var jsjs = new function() {
             var argCode = "(" + args.join(",") + ")";
             var retPC = ++this._pc;
             var out = func;
-            this.emit("world._target = " + func + ";",
+            this.emit("if (typeof " + func + " !== 'function')",
+                      // XXX Real exception
+                      "  throw 'TypeError';",
+                      "world._target = " + func + ";",
                       "arg = " + func + ".call" + argCode + ";",
                       "world._target = null;",
                       "pc = " + retPC + ";",
