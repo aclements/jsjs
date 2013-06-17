@@ -1037,23 +1037,23 @@ var jsjs = new function() {
         if (isExpr && node[0])
             throw "Unimplemented: Named function expressions";
         else if (isExpr)
-            var id = this.newReg();
+            var id = this.newReg(), internalID = "thisfunc";
         else
-            var id = targetID(node[0]);
+            var id = targetID(node[0]), internalID = id;
         var argList = [];
         for (var i = 0; i < node[1].length; i++)
             argList.push(targetID(node[1][i].v));
 
         // Function code prologue.  Shim/environment constructor
         if (isExpr)
-            this.emit(id + " = (function(" + argList.join(",") + ") {");
+            this.emit(id + " = (function " + internalID + "(" + argList.join(",") + ") {");
         else
             this.emit("function " + id + "(" + argList.join(",") + ") {");
 
         // If the current call target isn't this function, then we
         // were invoked by native code, so go through the shim.
         // XXX
-        this.emit("  if (world._target !== " + id + ")",
+        this.emit("  if (world._target !== " + internalID + ")",
                   "    throw 'Unimplemented: shim function';");
 
         // The current call target is this function, so follow the
