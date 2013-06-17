@@ -1132,8 +1132,11 @@ var jsjs = new function() {
             this.emit(code);
         }
 
+        // Introspection functions
+        this.emit("  function getPC() { return pc; }");
+
         // Push the execution function on the call stack
-        this.emit("  world._stack.push({exec:exec});");
+        this.emit("  world._stack.push({exec:exec, getPC:getPC});");
 
         // Restore context
         this._maxreg = oldMaxreg;
@@ -1608,6 +1611,23 @@ var jsjs = new function() {
         this._running = false;
         return this._last;
     };
+
+    // Return the current call stack as an array of Context objects,
+    // where the last Context object represents the currently
+    // executing function.
+    World.prototype.getStack = function() {
+        var stack = [];
+        for (var i = 0; i < this._stack.length; i++)
+            stack.push(new Context(this._stack[i].getPC()));
+        return stack;
+    };
+
+    // A Context object represents an "execution context", which is a
+    // single frame on the call stack of running JavaScript code.
+    function Context(pc) {
+        this.pc = pc;
+    }
+    this.Context = Context;
 
     //////////////////////////////////////////////////////////////////
     // External interface
