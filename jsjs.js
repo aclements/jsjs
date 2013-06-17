@@ -1011,7 +1011,7 @@ var jsjs = new function() {
         //      function is called by JSJS code.  It clears
         //      world._target, creates the lexical environment for the
         //      function, pushes the execution function on to the call
-        //      stack, and returns world._escape.
+        //      stack, and returns.
         //
         // 2) An execution function.  This is the compiled form of the
         //    body of the function.  In the target code, it's
@@ -1025,13 +1025,13 @@ var jsjs = new function() {
         //    re-enter the calling execution function, passing the
         //    returned value as its argument.
         //
-        // world._target and world._escape act as a handshake that
+        // world._target and world._stack act as a handshake that
         // allows native code to call JSJS functions and JSJS code to
         // call both JSJS functions and native functions.  The caller
         // sets world._target to indicate to JSJS functions that it
-        // can handle the JSJS calling convention, while the callee
-        // returns world._escape to indicate to a JSJS caller that it
-        // is following the JSJS calling convention.
+        // can handle the JSJS calling convention, and the callee
+        // acknowledges that it supports the JSJS calling convention
+        // by pushing itself on the call stack.
 
         var isExpr = node._type === "functionExpression";
         if (isExpr && node[0])
@@ -1069,11 +1069,9 @@ var jsjs = new function() {
         // Push the execution function on the call stack
         this.emit("  world._stack.push({exec:exec});");
 
-        // Return the escape singleton to indicate that this was an
-        // execution function
-        this.emit("  return world._escape;");
-
-        // Function code epilogue
+        // Function code epilogue.  Note that this function is not
+        // allowed to return anything because it might be used as a
+        // constructor.
         if (isExpr)
             this.emit("});");
         else
@@ -1403,27 +1401,39 @@ var jsjs = new function() {
             // single-stepping any more (probably in shim function)
             var ref = this.cExpr(node[0]);
             var func = this.emitGetValue(ref);
-            var thisValue;
+            var args;
             if (ref instanceof StaticReference && !ref.isEnvRef())
-                thisValue = ref.base;
+                args = [ref.base];
             else
-                thisValue = "undefined";
-            var args = [thisValue];
+                args = ["undefined"];
             for (var i = 0; i < node[1].length; i++)
                 args.push(this.emitGetValue(this.cExpr(node[1][i])));
             var argCode = "(" + args.join(",") + ")";
             var retPC = ++this._pc;
-            var out = func;
+            var out = this.newReg();
             this.emit("if (typeof " + func + " !== 'function')",
                       // XXX Real exception
                       "  throw 'TypeError';",
                       "world._target = " + func + ";",
-                      "arg = " + func + ".call" + argCode + ";",
+                      // Perform call.  If this is a native call, its
+                      // regular return value will go in tmp.  If this
+                      // is a JSJS call, it will push itself on the
+                      // call stack and tmp will be meaningless.
+                      "var tmp = " + func + ".call" + argCode + ";",
                       "world._target = null;",
                       "pc = " + retPC + ";",
-                      "if (arg === world._escape) return;",
+                      // If this was a JSJS call, we need to execute
+                      // it now, so return to the execution loop (the
+                      // value we return will be ignored).  When this
+                      // function returns, we'll be called with arg =
+                      // its return value.  If this was a native call,
+                      // we're still on the top of the call stack, so
+                      // the execution loop will come right back to us
+                      // and pass the value we return here as arg.
+                      "return tmp;",
                       "case " + retPC + ":",
-                      // The value is "returned" in arg
+                      // No matter what happened, the return value is
+                      // in arg at this point.
                       out + " = arg;");
             return out;
 
@@ -1539,8 +1549,6 @@ var jsjs = new function() {
         this._last = undefined;
         // The target Function object of the current call
         this._target = null;
-        // The escape singleton
-        this._escape = {};
     }
     this.World = World;
 
