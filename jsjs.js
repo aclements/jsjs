@@ -1277,7 +1277,7 @@ var jsjs = new function() {
                 var rval = this.emitGetValue(this.cExpr(node[1]));
                 this.emitPutValue(lref, rval);
                 return rval;
-            } else if (node._op[node._op.length - 1] === "=") {
+            } else if (binops[node._op] === binops["="]) {
                 // XXX Compound assignment
                 throw "Unimplemented: Compound assignment";
             } else if (node._op === ",") {
