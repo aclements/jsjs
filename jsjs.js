@@ -1239,7 +1239,7 @@ var jsjs = new function() {
 
     Compiler.prototype.cExprTop = function(node) {
         this._nreg = 0;
-        var out = this.cExpr(node);
+        var out = this.emitGetValue(this.cExpr(node));
         this._nreg = null;
         return out;
     };
