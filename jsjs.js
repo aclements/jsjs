@@ -1358,7 +1358,19 @@ var jsjs = new function() {
             }
             break;
 
-            // XXX ternary, new
+        case "ternary":
+            var lval = this.emitGetValue(this.cExpr(node[0]));
+            var altLabel = this.newLabel(), endLabel = this.newLabel();
+            this.emit("if (!(" + lval + "))")
+            this.emitJump(altLabel);
+            var out = this.emitGetValue(this.cExpr(node[1]));
+            this.emitJump(endLabel);
+            this.setLabel(altLabel);
+            this.assign(out, this.emitGetValue(this.cExpr(node[2])));
+            this.setLabel(endLabel);
+            return out;
+
+            // XXX new
 
         case "call":
             // XXX If I exit controlled code, make sure we're not
