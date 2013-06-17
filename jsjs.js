@@ -1190,8 +1190,26 @@ var jsjs = new function() {
             break;
 
         case "for":             // [ES5.1 12.6.3]
+            lCont = this.newLabel();
+            lBreak = this.newLabel();
+            if (node[0] && node[0]._type === "variableDeclaration")
+                throw "Unimplemented: variableDeclaration in for";
+            else if (node[0])
+                this.cExprTop(node[0]);
+            var top = this.newLabel();
+            this.setLabel(top);
+            var cond = this.cExprTop(node[1]);
+            this.emit("if (!" + cond + ")");
+            this.emitJump(lBreak);
+            this.cStatement(node[3], lCont, lBreak);
+            this.setLabel(lCont);
+            this.cExprTop(node[2]);
+            this.emitJump(top);
+            this.setLabel(lBreak);
+            break;
+
         case "forin":           // [ES5.1 12.6.4]
-            throw "Unimplemented: for";
+            throw "Unimplemented: for-in";
 
         case "continue":        // [ES5.1 12.7]
             if (node[0] !== null)
