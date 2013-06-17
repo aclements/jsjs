@@ -805,11 +805,11 @@ var jsjs = new function() {
         this.emit("case " + label.pc + ":");
     };
 
-    // Emit a possible pause point.  If the world is in single-step
+    // Emit a possible stop point.  If the world is in single-step
     // mode, this will escape target code execution.
-    Compiler.prototype.emitPause = function() {
+    Compiler.prototype.emitStop = function() {
         var pc = ++this._pc;
-        this.emit("if (world._singleStep) {pc = " + pc + "; world._running = false; return;}",
+        this.emit("if (world._singleStep) {pc = " + pc + "; world._running = false; return world.stopped;}",
                   "case " + pc + ":");
     };
 
@@ -1143,7 +1143,7 @@ var jsjs = new function() {
 
     Compiler.prototype.cStatement = function(node, lCont, lBreak) {
         if (node._type !== "{" && node._type !== ";")
-            this.emitPause();
+            this.emitStop();
 
         switch (node._type) {
         case "{":               // [ES5.1 12.1]
@@ -1550,6 +1550,9 @@ var jsjs = new function() {
     // world.continue()
     // world.step()
 
+    function Stopped() {}
+    var theStopped = new Stopped();
+
     // Construct a new World object for executing JavaScript code.
     //
     // global must be the object to use as the global environment for
@@ -1564,6 +1567,8 @@ var jsjs = new function() {
         this._last = undefined;
         // The target Function object of the current call
         this._target = null;
+        // The "stopped" singleton
+        this.stopped = theStopped;
 
         if (code)
             this.enter(code);
@@ -1584,8 +1589,15 @@ var jsjs = new function() {
     // executed code.
     World.prototype.cont = function() {
         this._singleStep = false;
-        this._run();
-        return this._last;
+        return this._run();
+    };
+
+    // Single step execution.  If this causes the program to
+    // terminate, this will return the program's value.  Otherwise, it
+    // will return this.stopped.
+    World.prototype.step = function() {
+        this._singleStep = true;
+        return this._run();
     };
 
     World.prototype._run = function() {
@@ -1595,6 +1607,7 @@ var jsjs = new function() {
             this._last = frame.exec(this._last);
         }
         this._running = false;
+        return this._last;
     };
 
     //////////////////////////////////////////////////////////////////
