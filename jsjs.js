@@ -1394,7 +1394,25 @@ var jsjs = new function() {
             this.setLabel(endLabel);
             return out;
 
-            // XXX new
+        case "new":
+            var func = this.emitGetValue(this.cExpr(node[0]));
+            var args = [];
+            if (node[1])
+                for (var i = 0; i < node[1].length; i++)
+                    args.push(this.emitGetValue(this.cExpr(node[1][i])));
+            var argCode = "(" + args.join(",") + ")";
+            var retPC = ++this._pc;
+            var out = this.newReg();
+            this.emit("world._target = " + func + ";",
+                      out + " = new " + func + argCode + ";",
+                      "world._target = null;",
+                      "pc = " + retPC + ";",
+                      // If the constructor was a JSJS function, we
+                      // need to let it execute.  If it wasn't, the
+                      // execution loop will come right back to here.
+                      "return;",
+                      "case " + retPC + ":");
+            return out;
 
         case "call":
             // XXX If I exit controlled code, make sure we're not
