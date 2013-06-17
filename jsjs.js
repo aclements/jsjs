@@ -990,24 +990,35 @@ var jsjs = new function() {
         if (!this._env)
             throw "BUG: cFunction called without active scope";
 
-        // A source function compiles into two target functions: an
-        // environment constructor, which creates the function's
-        // runtime environment and can be invoked from target code as
-        // if it were the native function, and an execution function,
-        // which contains the compiled code for the body of the
-        // function and is nested in the environment constructor so it
-        // has access to the environment.  The environment constructor
-        // returns the execution function once it has set up the
-        // environment.  Function calls are implemented by pushing the
-        // desired execution function on the world's stack and
-        // returning to the execution loop.  Returns are implemented
-        // by popping the current function off the world's stack and
-        // returning the function's return value; the execution loop
-        // will call re-invoke the caller's execution function,
-        // passing the returned value as its argument, and the
-        // execution function will resume where it left off.
+        // A source function compiles into three target functions:
         //
-        // XXX And a shim function
+        // 1) A shim function.  This is the function body that will be
+        //    invoked by host code.  It acts as a bridge from the
+        //    normal JavaScript calling convention to executing
+        //    compiled code.
+        //
+        // 2) An environment constructor.  This function is stored in
+        //    the _jsjsf property of the created Function object.  It
+        //    should be called with "this" and arguments just like a
+        //    native JavaScript function, but it only creates the
+        //    lexical environment for the function, pushes the
+        //    execution function on to the call stack, and returns.
+        //
+        // 3) A execution function.  This is the compiled form of the
+        //    body of the function.  In the target code, it's
+        //    lexically nested in the environment constructor so it
+        //    can access its runtime lexical environment directly
+        //    using host mechanisms.  This function can return to the
+        //    execution loop at any time, since it keeps track of
+        //    where in the function it is.
+        //
+        // Function calls are implemented by calling the environment
+        // constructor and then returning to the execution loop.
+        // Function returns are implemented by popping the current
+        // execution function off the call stack and returning the
+        // function's return value; the execution loop will then
+        // re-enter the calling execution function, passing the
+        // returned value as its argument.
 
         var isExpr = node._type === "functionExpression";
         if (isExpr && node[0])
@@ -1047,8 +1058,8 @@ var jsjs = new function() {
         // Compile body
         this.cSourceElementList(node[2], "function");
 
-        // Return the execution function
-        this.emit("  return exec;");
+        // Push the execution function on the call stack
+        this.emit("  world._stack.push({exec:exec});");
 
         // Function code epilogue
         this.emit("};")
@@ -1390,9 +1401,7 @@ var jsjs = new function() {
             var retPC = ++this._pc;
             var out = func;
             this.emit("if (typeof " + func + " == 'function' && '_jsjsf' in " + func + ") {",
-                      // XXX The environment constructor could push
-                      // the execution function itself.
-                      "  world._stack.push({exec:" + func + "._jsjsf.call" + argCode + "});",
+                      "  " + func + "._jsjsf.call" + argCode + ";",
                       "  pc = " + retPC + ";",
                       "  return;",
                       "} else {",
