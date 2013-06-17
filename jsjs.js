@@ -981,8 +981,7 @@ var jsjs = new function() {
             this.emit("  var " + this._allocatedIDs.join(", ") + ";");
 
         // Global code epilogue
-        this.emit("  return exec;",
-                  "})");
+        this.emit("})");
     };
 
     Compiler.prototype.cFunction = function(node) {
@@ -1065,9 +1064,6 @@ var jsjs = new function() {
         // Compile body
         this.cSourceElementList(node[2], "function");
 
-        // Push the execution function on the call stack
-        this.emit("  world._stack.push({exec:exec});");
-
         // Function code epilogue.  Note that this function is not
         // allowed to return anything because it might be used as a
         // constructor.
@@ -1135,6 +1131,9 @@ var jsjs = new function() {
             code += ";";
             this.emit(code);
         }
+
+        // Push the execution function on the call stack
+        this.emit("  world._stack.push({exec:exec});");
 
         // Restore context
         this._maxreg = oldMaxreg;
@@ -1581,7 +1580,7 @@ var jsjs = new function() {
     World.prototype.enter = function(code) {
         if (typeof code === "string")
             code = compile(code);
-        this._stack.push({exec: code.start(this)});
+        code.start(this);
         return this;
     };
 
