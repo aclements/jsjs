@@ -1401,7 +1401,35 @@ var jsjs = new function() {
             }
             return out;
 
-            // XXX object
+        case "object":
+            var out = this.newReg();
+            this.assign(out, "{}");
+            var names = {};
+            for (var i = 0; i < node[0].length; i++) {
+                var propNameTok = node[0][i][0];
+
+                if (propNameTok.t === "identifier" ||
+                    propNameTok.t === "keyword")
+                    var isID = true, name = propNameTok.v;
+                else if (propNameTok.t === "string" ||
+                         propNameTok.t === "number")
+                    var isID = false, name = eval("''+" + propNameTok.v);
+                else
+                    throw "BUG: Unreachable";
+                if (names.hasOwnProperty(name))
+                    throw new SyntaxError(
+                        node[0][i][0],
+                        "Duplicate property name in object literal not allowed in strict mode");
+                names[name] = true;
+
+                var propValue = this.emitGetValue(this.cExpr(node[0][i][1]));
+
+                if (isID)
+                    this.assign(out + "." + propNameTok.v, propValue);
+                else
+                    this.assign(out + "[" + propNameTok.v + "]", propValue);
+            }
+            return out;
 
         default:
             throw "BUG: Unhandled expr node " + node._type;
