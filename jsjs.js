@@ -1743,6 +1743,32 @@ var jsjs = new function() {
     //
     // This grammar actually works fine if we prefer the first branch
     // of LeftHandSideExpression.  XXX Wrong.  "x().y()"
+
+    // Actually useful things I have learned about JavaScript:
+    //
+    // JavaScript does not have block scope.  The only constructs that
+    // introduce scopes are functions, catch blocks, and with blocks.
+    // Hence, a variable can be declared within a control construct
+    // and still be available to code outside that block.
+    //   (function(){ if (true) { var x = 42; } return x; })() => 42
+    //
+    // The variable names bound in a function scope are static: it
+    // doesn't matter where you say "var" in a function, that variable
+    // will be declared (and initialized to undefined) the moment the
+    // function scope is entered.
+    //   {var x = 1; (function() { x = 2; var x;})(); x;} => 1
+    //
+    // You can declare functions at the top level of other functions.
+    // Like variable bindings, these names are bound throughout the
+    // entire enclosing function, regardless of where in the body the
+    // declaration occurs.  Unlike variable bindings, these names are
+    // immediately bound to the appropriate function.
+    //   (function() { return x(); function x(){return 42;}})() => 42
+    // Unlike most scripting languages, this applies even at global
+    // scope.
+    //
+    // If a constructor function returns an object, *that* will be the
+    // result of the "new" expression that invoked that constructor.
 };
 
 c = new jsjs.Compiler();
