@@ -676,6 +676,11 @@ var jsjs = new function() {
     //    describe any point in execution and we manage our own call
     //    stack.
 
+    // The current program counter for generated code.  PCs are
+    // globally unique so that they can be mapped to line numbers even
+    // when there are multiple potential Code objects.
+    var thePC = 0;
+
     // Transform a source code identifier into a target code
     // identifier.  All local identifiers in the source code have
     // corresponding identifiers in the target code.  This mangles
@@ -789,7 +794,7 @@ var jsjs = new function() {
 
     // Return the next program counter and associate it with node.
     Compiler.prototype.newPC = function(node) {
-        var pc = ++this._pc;
+        var pc = ++thePC;
         if (node)
             this._pcToNode[pc] = node;
         return pc;
