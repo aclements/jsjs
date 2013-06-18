@@ -866,8 +866,7 @@ var jsjs = new function() {
     };
 
     Compiler.prototype.getCode = function() {
-        // XXX Make a real Code object
-        return {start: eval(this.generate())};
+        return new Code(eval(this.generate()), this._pcToNode);
     };
 
     // Push a new StaticEnvironment on the environment stack,
@@ -973,8 +972,8 @@ var jsjs = new function() {
     };
 
     // Compile global code, emitting target code for a function that
-    // takes a world and pushes an execution function for the global
-    // code on the call stack.
+    // takes a code object and a world and pushes an execution
+    // function for the global code on the call stack.
     Compiler.prototype.cProgram = function(node) {
         if (this._env)
             throw "BUG: cProgram called with active scope";
@@ -982,7 +981,7 @@ var jsjs = new function() {
         // Global code prologue.  This will be the 'start' function of
         // the final Code object.
         // XXX Should this use new Function instead of eval for this?
-        this.emit("(function (world) {",
+        this.emit("(function (code, world) {",
                   "  'use strict';",
                   "  var global = world.global;");
 
@@ -1163,7 +1162,7 @@ var jsjs = new function() {
         this.emit("  function getPC() { return pc; }");
 
         // Push the execution function on the call stack
-        this.emit("  world._stack.push({exec:exec, getPC:getPC});");
+        this.emit("  world._stack.push({exec:exec, code:code, getPC:getPC});");
 
         // Restore context
         this._maxreg = oldMaxreg;
@@ -1581,6 +1580,11 @@ var jsjs = new function() {
     function Stopped() {}
     var theStopped = new Stopped();
 
+    function Code(startFunc, pcToNode) {
+        this.start = startFunc.bind(undefined, this);
+        this.pcToNode = pcToNode;
+    }
+
     // Construct a new World object for executing JavaScript code.
     //
     // A World represents an execution context stack (that is, a call
@@ -1610,7 +1614,7 @@ var jsjs = new function() {
     // started, it will start to execute code.  code must be a string
     // or Code object.  This returns 'this', so it can be chained.
     World.prototype.enter = function(code) {
-        if (typeof code === "string")
+        if (!(code instanceof Code))
             code = compile(code);
         code.start(this);
         return this;
@@ -1647,14 +1651,18 @@ var jsjs = new function() {
     World.prototype.getStack = function() {
         var stack = [];
         for (var i = 0; i < this._stack.length; i++)
-            stack.push(new Context(this._stack[i].getPC()));
+            stack.push(new Context(this._stack[i]));
         return stack;
     };
 
     // A Context object represents an "execution context", which is a
     // single frame on the call stack of running JavaScript code.
-    function Context(pc) {
-        this.pc = pc;
+    function Context(frame) {
+        this.pc = frame.getPC();
+        this.code = frame.code;
+        this.node = this.code.pcToNode[this.pc];
+        this.line = this.node.line;
+        this.col = this.node.col;
     }
     this.Context = Context;
 
