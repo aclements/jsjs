@@ -756,6 +756,7 @@ var jsjs = new function() {
         this._allocatedIDs = [];
         this._pc = 0;
         this._env = null;
+        this._pcToNode = {};
     }
     this.Compiler = Compiler;
 
@@ -786,6 +787,14 @@ var jsjs = new function() {
         return id;
     };
 
+    // Return the next program counter and associate it with node.
+    Compiler.prototype.newPC = function(node) {
+        var pc = ++this._pc;
+        if (node)
+            this._pcToNode[pc] = node;
+        return pc;
+    };
+
     Compiler.prototype.newLabel = function() {
         return {pc: null};
     };
@@ -798,17 +807,17 @@ var jsjs = new function() {
         }});
     };
 
-    Compiler.prototype.setLabel = function(label) {
+    Compiler.prototype.setLabel = function(label, node) {
         if (label.pc !== null)
             throw "BUG: Label set twice";
-        label.pc = ++this._pc;
+        label.pc = this.newPC(node);
         this.emit("case " + label.pc + ":");
     };
 
     // Emit a possible stop point.  If the world is in single-step
     // mode, this will escape target code execution.
-    Compiler.prototype.emitStop = function() {
-        var pc = ++this._pc;
+    Compiler.prototype.emitStop = function(node) {
+        var pc = this.newPC(node);
         this.emit("if (world._singleStep) {pc = " + pc + "; world._running = false; return world.stopped;}",
                   "case " + pc + ":");
     };
@@ -1099,19 +1108,19 @@ var jsjs = new function() {
         this._nreg = null;
 
         // Execution function prologue
-        ++this._pc;
+        var startPC = this.newPC();
         if (mode === "function")
             this.emit("var $this = this;");
         else if (mode === "global")
             this.emit("var $this = global;");
         else
             throw "Unimplemented: eval";
-        this.emit("var pc = " + this._pc + ";",
+        this.emit("var pc = " + startPC + ";",
                   "var V;",
                   "function exec(arg) {",
                   "  while(true) {",
                   "    switch (pc) {",
-                  "    case " + this._pc + ":");
+                  "    case " + startPC + ":");
 
         for (var i = 0; i < nodes.length; i++) {
             if (nodes[i]._type === "function")
@@ -1160,7 +1169,7 @@ var jsjs = new function() {
     // for continue and break.
     Compiler.prototype.cStatement = function(node, lCont, lBreak) {
         if (node._type !== "{" && node._type !== ";")
-            this.emitStop();
+            this.emitStop(node);
 
         switch (node._type) {
         case "{":               // [ES5.1 12.1]
@@ -1426,7 +1435,7 @@ var jsjs = new function() {
                 for (var i = 0; i < node[1].length; i++)
                     args.push(this.emitGetValue(this.cExpr(node[1][i])));
             var argCode = "(" + args.join(",") + ")";
-            var retPC = ++this._pc;
+            var retPC = this.newPC(node);
             var out = this.newReg();
             this.emit("world._target = " + func + ";",
                       out + " = new " + func + argCode + ";",
@@ -1452,7 +1461,7 @@ var jsjs = new function() {
             for (var i = 0; i < node[1].length; i++)
                 args.push(this.emitGetValue(this.cExpr(node[1][i])));
             var argCode = "(" + args.join(",") + ")";
-            var retPC = ++this._pc;
+            var retPC = this.newPC(node);
             var out = this.newReg();
             this.emit("if (typeof " + func + " !== 'function')",
                       // XXX Real exception
