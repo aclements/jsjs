@@ -958,12 +958,16 @@ var jsjs = new function() {
                   "return " + expr + ";");
     };
 
+    // Compile global code, emitting target code for a function that
+    // takes a world and pushes an execution function for the global
+    // code on the call stack.
     Compiler.prototype.cProgram = function(node) {
         if (this._env)
             throw "BUG: cProgram called with active scope";
 
         // Global code prologue.  This will be the 'start' function of
         // the final Code object.
+        // XXX Should this use new Function instead of eval for this?
         this.emit("(function (world) {",
                   "  'use strict';",
                   "  var global = world.global;");
@@ -984,6 +988,9 @@ var jsjs = new function() {
         this.emit("})");
     };
 
+    // Compile a function declaration or expression, returning the
+    // target code identifier bound to the Function object.  If this
+    // is a function expression, this identifier will be a register.
     Compiler.prototype.cFunction = function(node) {
         if (!this._env)
             throw "BUG: cFunction called without active scope";
@@ -1078,6 +1085,12 @@ var jsjs = new function() {
         return id;
     };
 
+    // Compile a source element list, emitting an execution function
+    // and code to push that execution function on the call stack.
+    // The generated code also binds the target identifiers "pc", "V",
+    // "$this", and all registers required by the generated code.
+    // mode must be "function", "global", or "eval" and affects how
+    // $this is computed and how the final implicit return works.
     Compiler.prototype.cSourceElementList = function(nodes, mode) {
         // Save context.  We have to save nreg in case we're compiling
         // a function expression.
@@ -1143,6 +1156,8 @@ var jsjs = new function() {
         this._nreg = oldNreg;
     };
 
+    // Compile a statement.  lCont and lBreak must be null or labels
+    // for continue and break.
     Compiler.prototype.cStatement = function(node, lCont, lBreak) {
         if (node._type !== "{" && node._type !== ";")
             this.emitStop();
@@ -1255,7 +1270,8 @@ var jsjs = new function() {
             break;
 
         case "return":          // [ES5.1 12.9]
-            // XXX SyntaxError if not in a function
+            // XXX SyntaxError if not in a function.  Maybe we should
+            // have an lReturn also and have a single exit point?
             if (node[0] === null)
                 this.emitReturn("undefined");
             else
@@ -1288,6 +1304,10 @@ var jsjs = new function() {
         }
     };
 
+    // Entry point for compiling expressions.  This returns a target
+    // identifier that will be bound to the result of the expression.
+    // The value of this identifier is only valid until the next
+    // expression evaluation.
     Compiler.prototype.cExprTop = function(node) {
         this._nreg = 0;
         var out = this.emitGetValue(this.cExpr(node));
@@ -1295,6 +1315,10 @@ var jsjs = new function() {
         return out;
     };
 
+    // Compile an expression, returning a register or constant
+    // expression for the value of the expression.  Don't call this
+    // directly; call cExprTop instead to initialize the register
+    // context.
     Compiler.prototype.cExpr = function(node) {
         function preassign(sref, refnode) {
             if (!(sref instanceof StaticReference))
@@ -1540,22 +1564,13 @@ var jsjs = new function() {
     // Runtime execution context
     //
 
-    // XXX What should the execution interface look like?
-    //
-    // new World(global object)
-    // world.eval(code) => stop reason
-    // world.continue() => stop reason
-    // world.step() => stop reason
-    //
-    // world.load(code)  queue code to execute
-    //   code can be string or Code object
-    // world.continue()
-    // world.step()
-
     function Stopped() {}
     var theStopped = new Stopped();
 
     // Construct a new World object for executing JavaScript code.
+    //
+    // A World represents an execution context stack (that is, a call
+    // stack) for code compiled by JSJS.
     //
     // global must be the object to use as the global environment for
     // this code.  code, if provided, must be a string or Code object
