@@ -1773,8 +1773,27 @@ var jsjs = new function() {
 
 c = new jsjs.Compiler();
 //c.cProgram(jsjs.parse("{var x = 1 + 2, y = x + 3; if (x) y = 2;}"));
-c.cProgram(jsjs.parse("var x = 1; function foo(y) {return x+y+z.val;} z.val=2; foo(41);"));
-//c.cProgram(jsjs.parse(str));
+//c.cProgram(jsjs.parse("var x = 1; function foo(y) {return x+y+z.val;} z.val=2; foo(41);"));
+//c.cProgram(jsjs.parse("function Foo(x){this.x = x;} new Foo(42);"));
+//c.cProgram(jsjs.parse("[1, 2, 3];"));
+//c.cProgram(jsjs.parse("var x = 1; x++;"));
+//c.cProgram(jsjs.parse("(function(x){return x+1;})(41);"));
+//c.cProgram(jsjs.parse("({a:1, 2:2, 'c':3})[2];"));
+c.cProgram(jsjs.parse(scapegoatStr));
 global = {z:{val:1}};
 w = new jsjs.World(global, c.getCode());
 console.log(w.cont());
+w.enter("var x = new Scapegoat();").cont();
+global.Math = Math;
+w.enter("x.insert(50);");
+while (true) {
+    var val = w.step();
+    if (val === w.stopped)
+        console.log("step", w.getStack().pop().line);
+    else {
+        console.log("done", val);
+        break;
+    }
+}
+console.log(w.enter("x.contains(50);").cont());
+console.log(w.enter("x.contains(10);").cont());
