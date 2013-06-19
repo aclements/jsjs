@@ -2,6 +2,7 @@
 <html>
   <head>
     <title>Test</title>
+    <script type="text/javascript" src="jquery-1.10.1.js"></script>
     <script type="text/javascript" src="scapegoat.str.js"></script>
     <script type="text/javascript" src="jsjs.js"></script>
     <script type="text/javascript" src="scapegoat.js"></script>
@@ -14,10 +15,19 @@
         -ms-user-select: none;
         user-select: none;
       }
+      pre {
+        font-size: 75%;
+      }
+      .line {
+        height: 1.2em;
+      }
     </style>
   </head>
   <body>
-    <canvas id="canvas-back" width="600" height="600" style="display:none"></canvas>
-    <canvas id="canvas" width="600" height="600" class="unselectable"></canvas>
+    <div style="position: fixed; right: 0px;">
+      <canvas id="canvas-back" width="600" height="600" style="display:none"></canvas>
+      <canvas id="canvas" width="600" height="600" class="unselectable"></canvas>
+    </div>
+    <pre id="code"></pre>
   </body>
 </html>

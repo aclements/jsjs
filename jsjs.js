@@ -1112,7 +1112,7 @@ var jsjs = new function() {
         this._nreg = null;
 
         // Execution function prologue
-        var startPC = this.newPC();
+        var startPC = this.newPC(nodes[0]);
         if (mode === "function")
             this.emit("var $this = this;");
         else if (mode === "global")
@@ -1617,6 +1617,13 @@ var jsjs = new function() {
         if (!(code instanceof Code))
             code = compile(code);
         code.start(this);
+        return this;
+    };
+
+    World.prototype.enterApply = function(func, fthis, args) {
+        this._target = func;
+        func.apply(fthis, args);
+        this._target = null;
         return this;
     };
 

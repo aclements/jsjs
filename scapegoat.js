@@ -153,8 +153,9 @@ Scapegoat.prototype.makeAnim = function(ctx, ctxDisplay) {
     }
 
     function markNode(node) {
-        var leftSize = this.treeSize(node.left);
-        var rightSize = this.treeSize(node.right);
+        // XXX Fix this once I have shims
+        var leftSize = 0; //this.treeSize(node.left);
+        var rightSize = 0; //this.treeSize(node.right);
         var size = leftSize + rightSize + 1;
         var color;
         if (leftSize > XALPHA * size || rightSize > XALPHA * size)
@@ -298,13 +299,47 @@ Anim.prototype.propColor = function(obj, prop, start, end) {
     });
 };
 
-var s = new Scapegoat();
+var scode = jsjs.compile(scapegoatStr);
+var sworld = new jsjs.World({Math:Math, console:console, i:0}, scode);
+sworld.cont();
+var s = sworld.enter("new Scapegoat();").cont();
+// XXX UGH
+s.forEach = Scapegoat.prototype.forEach;
+s.makeAnim = Scapegoat.prototype.makeAnim;
+s.draw = Scapegoat.prototype.draw;
+
+//var s = new Scapegoat();
 //for (var i = 0; i < 2000; i++)
 //    s.insert(Math.floor(Math.random() * 100));
 //    s.insert(i);
-var i = 0;
-function addElt() {
-    s.insert(i++);
+var stepI = 0;
+function step() {
+    if (sworld.getStack().length == 0) {
+        sworld.enterApply(s.insert, s, [stepI++]);
+        do {
+            sworld.step();
+        } while (sworld.getStack().pop().code !== scode);
+    } else {
+        // Step over calls
+        var stackHeight = sworld.getStack().length;
+        do {
+            sworld.step();
+        } while (sworld.getStack().length > stackHeight);
+    }
+
+    // XXX Step until the line changes
+    var stack = sworld.getStack();
+    $(".line").css("background", "");
+    if (stack.length) {
+        for (var i = 0; i < stack.length; i++) {
+            if (stack[i].code !== scode)
+                continue;
+            var line = stack[i].line;
+            var color = (i == stack.length - 1) ? "#a0a0ff" : "#d0d0ff";
+            $("#line" + (line - 1)).css("background", color);
+        }
+    }
+
     //s.insert(Math.floor(Math.random() * 100));
     s.makeAnim(document.getElementById("canvas-back").getContext("2d"),
                document.getElementById("canvas").getContext("2d")).start();
@@ -313,5 +348,9 @@ function addElt() {
 window.onload = function() {
 //    s.draw(document.getElementById("canvas-back").getContext("2d"),
 //           document.getElementById("canvas").getContext("2d"));
-    document.getElementById("canvas").onclick = addElt;
+    document.getElementById("canvas").onclick = step;
+    var lines = scapegoatStr.split("\n");
+    for (var line = 0; line < lines.length; line++)
+        $("#code").append($("<div class='line' id='line" + line + "'>").text(lines[line]));
+//    document.getElementById("code").innerText = scapegoatStr;
 };
