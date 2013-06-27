@@ -1160,9 +1160,18 @@ var jsjs = new function() {
 
         // Introspection functions
         this.emit("  function getPC() { return pc; }");
+        var envExpr = [];
+        for (var name in this._env.names)
+            if (this._env.names.hasOwnProperty(name))
+                envExpr.push(name + ":" +
+                             this._env.getIdentifierReference(name).expr());
+        this.emit("  function getEnv() {",
+                  "    return {" + envExpr.join(",") + "};",
+                  "  }");
 
         // Push the execution function on the call stack
-        this.emit("  world._stack.push({exec:exec, code:code, getPC:getPC});");
+        this.emit("  world._stack.push({exec:exec, code:code,",
+                  "    getPC:getPC, getEnv:getEnv});");
 
         // Restore context
         this._maxreg = oldMaxreg;
@@ -1666,6 +1675,7 @@ var jsjs = new function() {
     // single frame on the call stack of running JavaScript code.
     function Context(frame) {
         this.pc = frame.getPC();
+        this.env = frame.getEnv();
         this.code = frame.code;
         this.node = this.code.pcToNode[this.pc];
         this.line = this.node.line;
