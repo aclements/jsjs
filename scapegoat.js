@@ -300,7 +300,7 @@ Anim.prototype.propColor = function(obj, prop, start, end) {
 };
 
 var scode = jsjs.compile(scapegoatStr);
-var sworld = new jsjs.World({Math:Math, console:console, i:0}, scode);
+var sworld = new jsjs.World({Math:Math, console:console}, scode);
 sworld.cont();
 var s = sworld.enter("new Scapegoat();").cont();
 // XXX UGH
