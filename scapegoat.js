@@ -354,3 +354,26 @@ window.onload = function() {
         $("#code").append($("<div class='line' id='line" + line + "'>").text(lines[line]));
 //    document.getElementById("code").innerText = scapegoatStr;
 };
+
+// How to present this?
+//
+// Could use a literate code style.  Works well for stepping through
+// linear code, but not so good for recursive code or code with
+// interesting function calls.  Helpers could be off elsewhere and
+// stepping into them could be optional.  Don't work well for
+// distributed/concurrent code unless we focus on one node at a time
+// (though if one node is blocking for a response, we could switch
+// focus to the node it's blocking on).
+//
+// Could use two columns, with the explanation on the left and the
+// visualization and code in the right.
+//
+// Get rid of the "prototype" stuff and just use global functions.  No
+// sense in bogging down the important stuff with JavaScript details.
+//
+// Click a line to execute forward to it?
+//
+// One problem with many of these UIs is that they only show you right
+// now, not how you got here.  Maybe this is fine for fairly linear
+// code.  Maybe a scrubber would suffice, or something showing the
+// path through the code?
