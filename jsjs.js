@@ -1656,6 +1656,8 @@ var jsjs = new function() {
         // code, catch them here and wipe the call stack.
         this._running = true;
         while (this._running && this._stack.length) {
+            if (this._stack.length > 1000)
+                throw "Stack overflow";
             var frame = this._stack[this._stack.length - 1];
             this._last = frame.exec(this._last);
         }
