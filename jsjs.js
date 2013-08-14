@@ -1652,6 +1652,8 @@ var jsjs = new function() {
     };
 
     World.prototype._run = function() {
+        // XXX Handle exceptions.  Even if we can't catch them in JSJS
+        // code, catch them here and wipe the call stack.
         this._running = true;
         while (this._running && this._stack.length) {
             var frame = this._stack[this._stack.length - 1];
