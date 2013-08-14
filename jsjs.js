@@ -174,7 +174,9 @@ var jsjs = new function() {
 
     // XXX Much of this Node stuff was for when I thought I wanted to
     // re-print the code in something close to its original form.
-    // Much of this can probably be simplified if I don't need that.
+    // Much of this can probably be simplified since I don't need
+    // that.  Replace this all with a PEG parser with support for
+    // named node children.
 
     function Node(parser) {
         this._parser = parser;
