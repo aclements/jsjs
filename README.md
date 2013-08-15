@@ -1,3 +1,6 @@
+*Status:* On hold.  Demo working with global state visualization and
+strawman UI.  JavaScript compiler is mostly complete.
+
 This project's goal is to support interactive visualization of live
 algorithms and data structures.  Think of it as a general-purpose
 interactive JavaScript debugger coupled with algorithm-aware
